@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "IRIS Cognitive Companion",
+  "version": "1.0",
+  "description": "Companion extension for IRIS. Seamlessly syncs your active browser context with the local cognitive engine.",
+  "permissions": ["tabs"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1:32000/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "IRIS Cognitive Companion"
+  }
+}

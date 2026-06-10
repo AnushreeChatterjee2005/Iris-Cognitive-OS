@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IRIS | Cognitive Anchor</title>
+    <style>
+        :root {
+            --bg: rgba(18, 18, 18, 0.6);
+            --surface: rgba(30, 30, 30, 0.7);
+            --border: rgba(255, 255, 255, 0.1);
+            --accent: #00E5FF;
+            --accent-glow: rgba(0, 229, 255, 0.5);
+            --text-primary: #FFFFFF;
+            --text-secondary: rgba(255, 255, 255, 0.6);
+            --curve: cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: transparent;
+            color: var(--text-primary);
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            height: 100vh;
+            overflow: hidden;
+            -webkit-app-region: drag; /* allows dragging but we'll use a specific input */
+        }
+
+        .anchor-container {
+            margin-top: 15vh;
+            width: 600px;
+            background: var(--surface);
+            backdrop-filter: blur(20px) saturate(150%);
+            -webkit-backdrop-filter: blur(20px) saturate(150%);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255,255,255,0.05) inset;
+            display: flex;
+            align-items: center;
+            padding: 12px 24px;
+            transition: all 0.3s var(--curve);
+            position: relative;
+        }
+
+        .anchor-container::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            border-radius: 12px;
+            box-shadow: 0 0 15px var(--accent-glow);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        .anchor-container:focus-within::before {
+            opacity: 1;
+        }
+
+        .anchor-icon {
+            font-size: 1.5rem;
+            margin-right: 16px;
+            color: var(--accent);
+            text-shadow: 0 0 10px var(--accent-glow);
+            animation: float 3s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0% { transform: translateY(0px); }
+            50% { transform: translateY(-3px); }
+            100% { transform: translateY(0px); }
+        }
+
+        .anchor-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--text-primary);
+            font-size: 1.5rem;
+            font-weight: 300;
+            -webkit-app-region: no-drag;
+            letter-spacing: 0.02em;
+        }
+
+        .anchor-input::placeholder {
+            color: rgba(255, 255, 255, 0.3);
+            font-weight: 300;
+        }
+
+        .keyboard-hint {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            background: rgba(255,255,255,0.05);
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid rgba(255,255,255,0.1);
+            margin-left: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="anchor-container">
+        <div class="anchor-icon">🎯</div>
+        <input type="text" id="anchor-input" class="anchor-input" placeholder="What is your current focus?" autocomplete="off" spellcheck="false" autofocus>
+        <div class="keyboard-hint">Enter</div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        const input = document.getElementById('anchor-input');
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const intent = input.value.trim();
+                if (intent) {
+                    ipcRenderer.send('set-intent-anchor', intent);
+                }
+                ipcRenderer.send('hide-anchor-window');
+            } else if (e.key === 'Escape') {
+                ipcRenderer.send('hide-anchor-window');
+            }
+        });
+
+        // Focus input automatically when window is shown
+        ipcRenderer.on('focus-anchor', () => {
+            input.value = '';
+            input.focus();
+        });
+    </script>
+</body>
+</html>

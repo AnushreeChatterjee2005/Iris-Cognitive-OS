@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.gemini/
+*.sqlite
+*.sqlite-journal
+.env
+.vscode/
+package-lock.json
+*.log
+
+# Python Backend & ChromaDB
+__pycache__/
+*.pyc
+.iris_chroma_db/
+backend/env/
+backend/venv/
