@@ -1,16 +1,24 @@
-node_modules/
-dist/
-.gemini/
-*.sqlite
-*.sqlite-journal
-.env
-.vscode/
-package-lock.json
+# Logs
+logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# Python Backend & ChromaDB
-__pycache__/
-*.pyc
-.iris_chroma_db/
-backend/env/
-backend/venv/
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
