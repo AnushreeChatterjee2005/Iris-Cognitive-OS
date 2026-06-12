@@ -33,10 +33,10 @@ export class IntentParser {
     console.log(`Parsing intent: "${text}"`);
     
     const candidateLabels = [
-      'find a file or search for a document', 
+      'search for code, find a file, locate styles, or read documentation', 
       'manage windows or split screen layout', 
-      'automate a task or extract text', 
-      'configure settings or system shell'
+      'automate a task or run a workflow', 
+      'configure settings or execute a shell command'
     ];
     
     // Perform zero-shot classification via WebAssembly
@@ -46,10 +46,10 @@ export class IntentParser {
     const confidence = result.scores[0];
 
     let module = 'Unknown';
-    if (topLabel.includes('file')) module = 'FileSystem';
+    if (topLabel.includes('search') || topLabel.includes('code') || topLabel.includes('file')) module = 'FileSystem';
     else if (topLabel.includes('windows')) module = 'WindowManager';
     else if (topLabel.includes('automate')) module = 'Automation';
-    else if (topLabel.includes('settings')) module = 'Shell';
+    else if (topLabel.includes('settings') || topLabel.includes('shell')) module = 'Shell';
 
     console.log(`Intent parsed -> Module: ${module} (Confidence: ${(confidence * 100).toFixed(2)}%)`);
     return { module, confidence, text };

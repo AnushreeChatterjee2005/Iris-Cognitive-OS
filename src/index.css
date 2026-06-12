@@ -262,6 +262,57 @@ body {
   animation: blink 0.8s infinite;
 }
 
+.semantic-results {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.semantic-item {
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.semantic-item:hover {
+  background-color: rgba(255, 255, 255, 0.03);
+}
+
+.semantic-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.semantic-path {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  color: var(--primary-light);
+  font-weight: 700;
+}
+
+.semantic-score {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.semantic-text {
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.4;
+}
+
 /* ====================================================
    DASHBOARD: COGNITIVE HUB
    ==================================================== */
@@ -543,3 +594,257 @@ body {
 @keyframes flow { to { stroke-dashoffset: -100; } }
 
 /* Search Overlay animations end */
+
+/* ====================================================
+   WATCH & STRIKE: MAGIC LASSO UI
+   ==================================================== */
+.watch-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 9999;
+  cursor: crosshair;
+  display: none;
+}
+.watch-overlay.active {
+  display: block;
+}
+
+.sweep-dim-bg {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(2px) brightness(0.4);
+  clip-path: polygon(100% 0, 100% 0, 100% 0, 100% 0);
+  animation: sweepDim 0.6s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+  pointer-events: none;
+}
+
+@keyframes sweepDim {
+  0% { clip-path: polygon(100% 0, 100% 0, 100% 0, 100% 0); }
+  100% { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
+}
+
+.instruction-toast {
+  position: absolute;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(4, 6, 8, 0.85);
+  border: 1px solid rgba(255, 170, 0, 0.3);
+  padding: 12px 24px;
+  border-radius: 8px;
+  color: #fff;
+  font-family: 'Inter', sans-serif;
+  font-weight: 500;
+  letter-spacing: 1px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  pointer-events: none;
+  animation: slideUpFade 0.3s ease forwards;
+}
+
+.drawn-box {
+  position: absolute;
+  border: 2px dashed #f39c12;
+  background: rgba(243, 156, 18, 0.1);
+  box-shadow: 0 0 15px rgba(243, 156, 18, 0.3);
+  pointer-events: none;
+}
+
+.drawn-box.final {
+  border-style: solid;
+  border-width: 3px;
+  animation: pulseCore 2s infinite alternate;
+}
+
+.arrow-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10000;
+}
+
+.command-floater {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  background: rgba(10, 15, 30, 0.95);
+  border: 1px solid rgba(52, 152, 219, 0.4);
+  padding: 15px;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 20px rgba(52, 152, 219, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 350px;
+  backdrop-filter: blur(10px);
+  z-index: 10001;
+}
+
+.mode-selector {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 5px;
+}
+
+.mode-btn {
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-btn:hover {
+  color: #f8fafc;
+}
+
+.mode-btn.active {
+  background: rgba(59, 130, 246, 0.2);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.5);
+}
+
+/* Status Widget Animations */
+@keyframes slideToCorner {
+  0% {
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1.2);
+    opacity: 0;
+  }
+  10% {
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1.1);
+    opacity: 1;
+  }
+  30% {
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+  }
+  40% {
+    top: auto;
+    bottom: 30px;
+    left: auto;
+    right: 30px;
+    transform: none;
+    opacity: 1;
+  }
+  100% {
+    top: auto;
+    bottom: 30px;
+    left: auto;
+    right: 30px;
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes progressFill {
+  0% { width: 0%; }
+  100% { width: 100%; }
+}
+
+.status-widget {
+  position: absolute;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  padding: 15px 20px;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 15px rgba(59, 130, 246, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 1000;
+  min-width: 250px;
+  animation: slideToCorner 4.5s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.widget-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.widget-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.widget-title {
+  color: #f8fafc;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.widget-subtitle {
+  color: #94a3b8;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.widget-progress-container {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 5px;
+}
+
+.widget-progress-bar {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 2px;
+  animation: progressFill 15s ease-out forwards;
+}
+
+.command-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  padding: 10px 15px;
+  border-radius: 6px;
+  font-size: 1rem;
+  outline: none;
+  font-family: 'Courier New', Courier, monospace;
+}
+
+.command-input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.watcher-status {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(40, 90, 72, 0.9);
+  border: 1px solid #2ecc71;
+  padding: 12px 24px;
+  border-radius: 8px;
+  color: #2ecc71;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  letter-spacing: 2px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

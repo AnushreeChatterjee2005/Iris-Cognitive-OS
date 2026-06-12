@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IRIS Demo: Now Mode</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --text: #f8fafc;
+            --muted: #94a3b8;
+            --primary: #3b82f6;
+            --success: #10b981;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .split {
+            flex: 1;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .left {
+            border-right: 1px solid var(--border);
+            background: #cbd5e1; /* Looks like a PDF background */
+            color: #0f172a;
+        }
+
+        /* Fake PDF Invoice */
+        .invoice-card {
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .invoice-header {
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+
+        .invoice-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #334155;
+            letter-spacing: 2px;
+        }
+
+        .invoice-details {
+            text-align: right;
+            font-size: 14px;
+            color: #64748b;
+            line-height: 1.6;
+        }
+
+        .invoice-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+        }
+
+        .invoice-table th, .invoice-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .invoice-table th {
+            color: #64748b;
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .invoice-table td.amount {
+            text-align: right;
+            font-weight: 500;
+        }
+
+        .invoice-total {
+            margin-top: auto;
+            background: #f8fafc;
+            padding: 20px;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border: 1px solid #e2e8f0;
+        }
+
+        .total-label {
+            font-size: 18px;
+            font-weight: 600;
+            color: #475569;
+        }
+
+        .total-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: #0f172a;
+        }
+
+        /* Fake QuickBooks ERP */
+        .right {
+            background: var(--surface);
+        }
+
+        .erp-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .erp-logo {
+            width: 40px;
+            height: 40px;
+            background: var(--primary);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+        }
+
+        .erp-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .erp-form {
+            background: var(--bg);
+            padding: 30px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .form-group label {
+            font-size: 14px;
+            color: var(--muted);
+            font-weight: 500;
+        }
+
+        .form-group input {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 16px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .form-group input:focus {
+            border-color: var(--primary);
+        }
+
+        .submit-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 14px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        .submit-btn:hover {
+            opacity: 0.9;
+        }
+
+        .demo-pill {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.8);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            border: 1px solid var(--border);
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="demo-pill">MODE: NOW (Immediate Extraction)</div>
+
+    <!-- LEFT: Source Data (PDF Invoice) -->
+    <div class="split left">
+        <div class="invoice-card">
+            <div class="invoice-header">
+                <div class="invoice-title">INVOICE</div>
+                <div class="invoice-details">
+                    INV-2026-089<br>
+                    Date: Oct 24, 2026<br>
+                    Due: Nov 24, 2026
+                </div>
+            </div>
+
+            <table class="invoice-table">
+                <thead>
+                    <tr>
+                        <th>Description</th>
+                        <th>Qty</th>
+                        <th>Rate</th>
+                        <th class="amount">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Enterprise API Access (Annual)</td>
+                        <td>1</td>
+                        <td>$12,500.00</td>
+                        <td class="amount">$12,500.00</td>
+                    </tr>
+                    <tr>
+                        <td>Dedicated Support Retainer</td>
+                        <td>3</td>
+                        <td>$1,200.00</td>
+                        <td class="amount">$3,600.00</td>
+                    </tr>
+                    <tr>
+                        <td>Overage Fees (Sep)</td>
+                        <td>1</td>
+                        <td>$450.50</td>
+                        <td class="amount">$450.50</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="invoice-total">
+                <div class="total-label">Balance Due:</div>
+                <div class="total-value">$16,550.50</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- RIGHT: Target Application (ERP System) -->
+    <div class="split right">
+        <div class="erp-header">
+            <div class="erp-logo">ERP</div>
+            <div class="erp-title">Financial Ledger Entry</div>
+        </div>
+
+        <div class="erp-form">
+            <div class="form-group">
+                <label>Vendor / Client Name</label>
+                <input type="text" value="Acme Corp Solutions" readonly style="opacity: 0.7;">
+            </div>
+            
+            <div class="form-group">
+                <label>Invoice Number</label>
+                <input type="text" value="INV-2026-089" readonly style="opacity: 0.7;">
+            </div>
+
+            <div class="form-group" style="margin-top: 20px;">
+                <label style="color: var(--text); font-size: 16px;">Total Authorized Payment Amount</label>
+                <input type="text" id="amount-input" placeholder="0.00">
+            </div>
+
+            <button class="submit-btn">Process Payment</button>
+    </div>
+</body>
+</html>

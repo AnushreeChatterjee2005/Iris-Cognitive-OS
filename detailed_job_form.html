@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IRIS Demo: Detailed Job Application</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --text: #f8fafc;
+            --muted: #94a3b8;
+            --primary: #10b981;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            justify-content: center;
+            padding: 40px;
+            min-height: 100vh;
+            overflow-y: auto;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 800px;
+            background: var(--surface);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            padding: 40px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo {
+            width: 48px;
+            height: 48px;
+            background: var(--primary);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 20px;
+        }
+
+        .title-group h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .title-group p {
+            font-size: 14px;
+            color: var(--muted);
+        }
+
+        .form-section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--primary);
+            margin: 25px 0 15px 0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .form-group.full-width {
+            grid-column: span 2;
+        }
+
+        .form-group label {
+            font-size: 14px;
+            color: var(--muted);
+            font-weight: 500;
+        }
+
+        .form-group input, .form-group textarea {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .form-group input:focus, .form-group textarea:focus {
+            border-color: var(--primary);
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .submit-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 16px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 30px;
+            transition: background 0.2s;
+        }
+
+        .submit-btn:hover {
+            background: #059669;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <div class="logo">WD</div>
+            <div class="title-group">
+                <h1>Workday: Detailed Application</h1>
+                <p>Senior Frontend Engineer - Req #88291</p>
+            </div>
+        </div>
+
+        <form>
+            <div class="form-section-title">Personal Information</div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>First Name</label>
+                    <input type="text" placeholder="e.g. Jane">
+                </div>
+                <div class="form-group">
+                    <label>Last Name</label>
+                    <input type="text" placeholder="e.g. Doe">
+                </div>
+                <div class="form-group">
+                    <label>Email Address</label>
+                    <input type="email" placeholder="name@domain.com">
+                </div>
+                <div class="form-group">
+                    <label>Phone Number</label>
+                    <input type="text" placeholder="(555) 000-0000">
+                </div>
+                <div class="form-group full-width">
+                    <label>Location (City, State)</label>
+                    <input type="text" placeholder="e.g. San Francisco, CA">
+                </div>
+            </div>
+
+            <div class="form-section-title">Education & Academic</div>
+            <div class="form-grid">
+                <div class="form-group full-width">
+                    <label>University / College</label>
+                    <input type="text" placeholder="Institution Name">
+                </div>
+                <div class="form-group">
+                    <label>Highest Degree Earned</label>
+                    <input type="text" placeholder="e.g. B.S. Computer Science">
+                </div>
+                <div class="form-group">
+                    <label>Cumulative GPA</label>
+                    <input type="text" placeholder="e.g. 3.8/4.0">
+                </div>
+            </div>
+
+            <div class="form-section-title">Professional Experience</div>
+            <div class="form-grid">
+                <div class="form-group full-width">
+                    <label>Most Recent Company</label>
+                    <input type="text" placeholder="Company Name">
+                </div>
+                <div class="form-group">
+                    <label>Most Recent Job Title</label>
+                    <input type="text" placeholder="Job Title">
+                </div>
+                <div class="form-group">
+                    <label>Years of Experience</label>
+                    <input type="text" placeholder="e.g. 5 years">
+                </div>
+            </div>
+
+            <div class="form-section-title">Skills & Capabilities</div>
+            <div class="form-grid">
+                <div class="form-group full-width">
+                    <label>Primary Technical Skills (Comma separated)</label>
+                    <textarea placeholder="e.g. React, TypeScript, Python..."></textarea>
+                </div>
+                <div class="form-group full-width">
+                    <label>Core Methodologies & Tools</label>
+                    <input type="text" placeholder="e.g. Agile, Git, Webpack...">
+                </div>
+            </div>
+
+            <button type="button" class="submit-btn">Submit Comprehensive Application</button>
+        </form>
+    </div>
+
+</body>
+</html>

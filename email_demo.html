@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IRIS Demo: Semantic Extraction</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --text: #f8fafc;
+            --muted: #94a3b8;
+            --primary: #3b82f6;
+            --email-bg: #ffffff;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .split {
+            flex: 1;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .left {
+            border-right: 1px solid var(--border);
+            background: #e2e8f0;
+            color: #0f172a;
+        }
+
+        /* Fake Email Client */
+        .email-client {
+            background: var(--email-bg);
+            border-radius: 8px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .email-header {
+            border-bottom: 1px solid #e2e8f0;
+            padding: 20px;
+            background: #f8fafc;
+        }
+
+        .email-subject {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .email-meta {
+            font-size: 14px;
+            color: #64748b;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .email-body {
+            padding: 30px;
+            font-size: 15px;
+            line-height: 1.8;
+            color: #334155;
+            white-space: pre-wrap;
+        }
+
+        /* Fake CRM / ERP */
+        .right {
+            background: var(--surface);
+        }
+
+        .crm-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .crm-logo {
+            width: 40px;
+            height: 40px;
+            background: #8b5cf6;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+        }
+
+        .crm-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .crm-form {
+            background: var(--bg);
+            padding: 30px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .form-group label {
+            font-size: 14px;
+            color: var(--muted);
+            font-weight: 500;
+        }
+
+        .form-group input {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 16px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .form-group input:focus {
+            border-color: #8b5cf6;
+        }
+
+        .submit-btn {
+            background: #8b5cf6;
+            color: white;
+            border: none;
+            padding: 14px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        .demo-pill {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.8);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            border: 1px solid var(--border);
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="demo-pill">MODE: NOW (Semantic LLM Extraction)</div>
+
+    <!-- LEFT: Unstructured Email -->
+    <div class="split left">
+        <div class="email-client">
+            <div class="email-header">
+                <div class="email-subject">Re: Final approval for Q3 Cloud Infrastructure</div>
+                <div class="email-meta">
+                    <span>From: Sarah Jenkins &lt;sarah.j@techflow.io&gt;</span>
+                    <span>Oct 24, 2026</span>
+                </div>
+            </div>
+            <div class="email-body">Hey team,
+
+Just wrapping up the vendor approvals for the Q3 infrastructure rollout. We had a bit of back-and-forth on the final numbers but everything is settled.
+
+Please log the final invoice into the system so we can get it paid by Friday. The vendor is Nexus Cloud Services. The official reference number they gave me is PO-88942-B. The final agreed upon amount, after the SLA discount, came out to $34,250.00. 
+
+Can someone please extract this into the ERP right away?
+
+Thanks,
+Sarah</div>
+        </div>
+    </div>
+
+    <!-- RIGHT: Target CRM Form -->
+    <div class="split right">
+        <div class="crm-header">
+            <div class="crm-logo">ERP</div>
+            <div class="crm-title">New Vendor Invoice</div>
+        </div>
+
+        <div class="crm-form">
+            <div class="form-group">
+                <label>Vendor Name</label>
+                <input type="text" id="vendor-input" placeholder="e.g. Acme Corp">
+            </div>
+            
+            <div class="form-group">
+                <label>Purchase Order (PO) Number</label>
+                <input type="text" placeholder="e.g. PO-1234">
+            </div>
+
+            <div class="form-group">
+                <label>Final Authorized Amount</label>
+                <input type="text" placeholder="0.00">
+            </div>
+
+            <button class="submit-btn">Save to Ledger</button>
+    </div>
+</body>
+</html>

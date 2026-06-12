@@ -69,8 +69,8 @@ app.whenReady().then(() => {
   createDashboardWindow();
   createSearchWindow();
 
-  // Register Ctrl+Shift+Space global shortcut
-  const ret = globalShortcut.register('CommandOrControl+Shift+Space', () => {
+  // Register Ctrl+K global shortcut
+  const ret = globalShortcut.register('CommandOrControl+K', () => {
     if (searchWindow) {
       if (searchWindow.isVisible()) {
         searchWindow.webContents.executeJavaScript(`window.dispatchEvent(new Event('electron-window-hidden'))`).catch(console.error);
@@ -106,5 +106,79 @@ app.on('will-quit', () => {
 });
 
 ipcMain.on('hide-window', () => {
-  searchWindow?.hide();
+  if (searchWindow) {
+    searchWindow.blur(); // Drop focus so Windows explicitly hands it back to Chrome
+    searchWindow.hide(); // Physically remove window from screen
+  }
+});
+
+ipcMain.on('set-click-through', (event, ignore) => {
+  if (searchWindow) {
+    if (ignore) {
+      searchWindow.setIgnoreMouseEvents(true, { forward: true });
+    } else {
+      searchWindow.setIgnoreMouseEvents(false);
+    }
+  }
+});
+
+import * as fs from 'fs';
+
+ipcMain.handle('read-workspace-files', async () => {
+  const dirPath = process.cwd();
+  const chunksToEmbed: { filePath: string, text: string }[] = [];
+  
+  function chunkText(text: string, maxLen: number): string[] {
+    const chunks: string[] = [];
+    let currentChunk = '';
+    for (const line of text.split('\n')) {
+      if ((currentChunk + '\n' + line).length > maxLen) {
+        if (currentChunk.trim()) chunks.push(currentChunk.trim());
+        currentChunk = line;
+      } else {
+        currentChunk += (currentChunk ? '\n' : '') + line;
+      }
+    }
+    if (currentChunk.trim()) chunks.push(currentChunk.trim());
+    return chunks;
+  }
+
+  function scan(currentDir: string) {
+    if (!fs.existsSync(currentDir)) return;
+    for (const file of fs.readdirSync(currentDir)) {
+      const fullPath = path.join(currentDir, file);
+      try {
+        if (fs.statSync(fullPath).isDirectory()) {
+          if (!file.startsWith('.') && file !== 'node_modules' && file !== 'dist' && file !== 'dist-electron') {
+            scan(fullPath);
+          }
+        } else {
+          const ext = path.extname(file).toLowerCase();
+          if (['.md', '.txt', '.ts', '.tsx', '.json', '.css'].includes(ext)) {
+            const content = fs.readFileSync(fullPath, 'utf-8');
+            if (content.trim()) {
+              const fileChunks = chunkText(content, 500);
+              for (const c of fileChunks) {
+                chunksToEmbed.push({ filePath: fullPath, text: c });
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
+  scan(dirPath);
+  return chunksToEmbed;
+});
+
+ipcMain.handle('save-semantic-index', async (_, data) => {
+  fs.writeFileSync(path.join(process.cwd(), '.iris_semantic_index.json'), JSON.stringify(data), 'utf-8');
+  return true;
+});
+
+ipcMain.handle('load-semantic-index', async () => {
+  const p = path.join(process.cwd(), '.iris_semantic_index.json');
+  if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  return [];
 });

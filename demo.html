@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IRIS Live Demo Setup</title>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; background: #1e1e1e; }
+        
+        /* Left: Terminal */
+        .terminal { flex: 1; background: #000; color: #00ff00; font-family: 'Courier New', Courier, monospace; padding: 20px; overflow: hidden; border-right: 2px solid #333; }
+        .terminal-header { color: #fff; margin-bottom: 20px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        .line { margin-bottom: 5px; opacity: 0; animation: fadeIn 0.1s forwards; }
+        .cursor { display: inline-block; width: 8px; height: 15px; background: #00ff00; animation: blink 1s infinite; }
+        
+        /* Right: Slack/Discord */
+        .slack { flex: 1; background: #36393f; display: flex; flex-direction: column; color: #dcddde; }
+        .slack-header { background: #2f3136; padding: 20px; font-weight: bold; border-bottom: 1px solid #202225; }
+        .slack-messages { flex: 1; padding: 20px; overflow-y: auto; }
+        .message { margin-bottom: 20px; display: flex; gap: 15px; }
+        .avatar { width: 40px; height: 40px; border-radius: 50%; background: #5865F2; flex-shrink: 0; }
+        .msg-content h4 { margin: 0 0 5px 0; color: #fff; font-size: 14px; }
+        .msg-content p { margin: 0; font-size: 14px; line-height: 1.4; }
+        .slack-input-area { padding: 20px; background: #36393f; }
+        .slack-input { width: 100%; background: #40444b; border: none; border-radius: 8px; padding: 15px; color: #dcddde; font-size: 14px; box-sizing: border-box; outline: none; }
+        
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+        @keyframes fadeIn { to { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <div class="terminal">
+        <div class="terminal-header">~/projects/core-engine — Build Script</div>
+        <div id="term-output">
+            <div class="line">Initializing build sequence...</div>
+            <div class="line">Fetching dependencies (142/142)... OK</div>
+        </div>
+        <div><span id="progress"></span><span class="cursor"></span></div>
+    </div>
+
+    <div class="slack">
+        <div class="slack-header"># deployments</div>
+        <div class="slack-messages" id="chat">
+            <div class="message">
+                <div class="avatar" style="background:#ed4245;"></div>
+                <div class="msg-content">
+                    <h4>DevOps Bot <span style="font-size:11px; color:#72767d; font-weight:normal;">Today at 10:41 AM</span></h4>
+                    <p>WARNING: Core engine deployment failed on production. Manual intervention required.</p>
+                </div>
+            </div>
+            <div class="message">
+                <div class="avatar" style="background:#3ba55c;"></div>
+                <div class="msg-content">
+                    <h4>Anushree <span style="font-size:11px; color:#72767d; font-weight:normal;">Today at 10:42 AM</span></h4>
+                    <p>I'm compiling the hotfix locally right now. Waiting for the build script to finish.</p>
+                </div>
+            </div>
+        </div>
+        <div class="slack-input-area">
+            <input type="text" id="target-input" class="slack-input" placeholder="Message #deployments">
+        </div>
+    </div>
+
+    <script>
+        const term = document.getElementById('term-output');
+        const progress = document.getElementById('progress');
+        
+        let logs = [
+            "Initializing build sequence...",
+            "Loading configuration profiles...",
+            "Fetching dependencies (142/142)... OK",
+            "Resolving version conflicts...",
+            "Compiling src/core/engine.c...",
+            "Compiling src/core/memory.c...",
+            "Compiling src/core/network.c...",
+            "Compiling src/core/threading.c...",
+            "Compiling src/modules/auth.c...",
+            "Compiling src/modules/crypto.c...",
+            "Compiling src/modules/database.c...",
+            "Compiling src/utils/strings.c...",
+            "Compiling src/utils/math.c...",
+            "Linking objects (phase 1)...",
+            "Linking objects (phase 2)...",
+            "Optimizing binary (O3)...",
+            "Stripping debug symbols...",
+            "Running static analysis...",
+            "Running unit tests (1/5): Core...",
+            "Running unit tests (2/5): Memory...",
+            "Running unit tests (3/5): Network...",
+            "Running unit tests (4/5): Crypto...",
+            "Running unit tests (5/5): Database...",
+            "All tests passed (104/104).",
+            "Generating deployment artifact...",
+            "Compressing artifact (tar.gz)...",
+            "Signing binary with production key...",
+            "Verifying checksums..."
+        ];
+
+        let count = 0;
+        
+        function runTerminal() {
+            if (count < logs.length) {
+                const div = document.createElement('div');
+                div.className = 'line';
+                div.textContent = logs[count];
+                term.appendChild(div);
+                
+                // Keep scrolled to bottom
+                term.parentElement.scrollTop = term.parentElement.scrollHeight;
+                
+                count++;
+                
+                // Random delay between 0.5 and 1.5 seconds
+                setTimeout(runTerminal, Math.random() * 1000 + 500);
+            } else {
+                setTimeout(() => {
+                    progress.innerHTML = "<br><span style='color: #00ff00; font-weight: bold; font-size: 24px;'>Success</span><br>Artifact ready for deployment.";
+                    term.parentElement.scrollTop = term.parentElement.scrollHeight;
+                }, 2000);
+            }
+        }
+
+        // Start the fake terminal build script after 3 seconds
+        setTimeout(runTerminal, 3000);
+    </script>
+</body>
+</html>
