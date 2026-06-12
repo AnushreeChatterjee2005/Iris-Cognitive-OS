@@ -6,6 +6,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let dashboardWindow: BrowserWindow | null = null;
 let searchWindow: BrowserWindow | null = null;
+let ignoreBlur = false;
 
 function createDashboardWindow() {
   dashboardWindow = new BrowserWindow({
@@ -56,6 +57,7 @@ function createSearchWindow() {
   }
 
   searchWindow.on('blur', () => {
+    if (ignoreBlur) return;
     searchWindow?.webContents.executeJavaScript(`window.dispatchEvent(new Event('electron-window-hidden'))`).catch(console.error);
     setTimeout(() => { searchWindow?.hide(); }, 50);
   });
@@ -107,19 +109,18 @@ app.on('will-quit', () => {
 
 ipcMain.on('hide-window', () => {
   if (searchWindow) {
-    searchWindow.blur(); // Drop focus so Windows explicitly hands it back to Chrome
-    searchWindow.hide(); // Physically remove window from screen
+    searchWindow.hide();
   }
 });
 
 ipcMain.on('set-click-through', (event, ignore) => {
   if (searchWindow) {
-    if (ignore) {
-      searchWindow.setIgnoreMouseEvents(true, { forward: true });
-    } else {
-      searchWindow.setIgnoreMouseEvents(false);
-    }
+    searchWindow.setIgnoreMouseEvents(ignore, { forward: true });
   }
+});
+
+ipcMain.on('set-ignore-blur', (event, ignore) => {
+  ignoreBlur = ignore;
 });
 
 import * as fs from 'fs';

@@ -123,6 +123,9 @@ function SearchBar() {
     // Make the transparent overlay click-through so user can interact with the app below
     if ((window as any).electronAPI && (window as any).electronAPI.setClickThrough) {
       (window as any).electronAPI.setClickThrough(true);
+      if ((window as any).electronAPI.setIgnoreBlur) {
+        (window as any).electronAPI.setIgnoreBlur(true);
+      }
     }
     
     // Robust Regex Parsing
@@ -144,41 +147,45 @@ function SearchBar() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          source_bbox: {
-            x: Math.round(sourceBox.x * dpr),
-            y: Math.round(sourceBox.y * dpr),
-            w: Math.round(sourceBox.w * dpr),
-            h: Math.round(sourceBox.h * dpr)
-          },
-          target_bbox: { 
-            x: Math.round(targetBox.x * dpr), 
-            y: Math.round(targetBox.y * dpr),
-            w: Math.round(targetBox.w * dpr),
-            h: Math.round(targetBox.h * dpr)
-          },
+          source_bbox: { x: Math.round(sourceBox.x * dpr), y: Math.round(sourceBox.y * dpr), w: Math.round(sourceBox.w * dpr), h: Math.round(sourceBox.h * dpr) },
+          target_bbox: { x: Math.round(targetBox.x * dpr), y: Math.round(targetBox.y * dpr), w: Math.round(targetBox.w * dpr), h: Math.round(targetBox.h * dpr) },
           condition: conditionStr.toLowerCase(),
           action_text: actionStr,
           mode: mode
         })
       });
 
-      // Close instantly when Python script finishes pasting
-      setIsVisible(false);
-      setPhase('idle');
-      if ((window as any).electronAPI && (window as any).electronAPI.setClickThrough) {
-        (window as any).electronAPI.setClickThrough(false);
+      if (mode === 'now') {
+        // Close instantly when Python script finishes pasting
+        setIsVisible(false);
+        setPhase('idle');
+        if ((window as any).electronAPI && (window as any).electronAPI.setClickThrough) {
+          (window as any).electronAPI.setClickThrough(false);
+          if ((window as any).electronAPI.setIgnoreBlur) {
+            (window as any).electronAPI.setIgnoreBlur(false);
+          }
+        }
+        setTimeout(() => { (window as any).electronAPI?.hideWindow(); }, 50);
+      } else {
+        // Leave the window open! The status widget will slide to the corner and act as a background indicator.
+        // The user can interact with their PC since setClickThrough(true) is already set!
+        console.log("Background watcher active. Widget will remain on screen.");
       }
-      setTimeout(() => { (window as any).electronAPI?.hideWindow(); }, 50);
 
     } catch (e) {
       console.error(e);
-      // Fallback close on error
-      setIsVisible(false);
-      setPhase('idle');
-      if ((window as any).electronAPI && (window as any).electronAPI.setClickThrough) {
-        (window as any).electronAPI.setClickThrough(false);
+      if (mode === 'now') {
+        // Fallback close on error
+        setIsVisible(false);
+        setPhase('idle');
+        if ((window as any).electronAPI && (window as any).electronAPI.setClickThrough) {
+          (window as any).electronAPI.setClickThrough(false);
+          if ((window as any).electronAPI.setIgnoreBlur) {
+            (window as any).electronAPI.setIgnoreBlur(false);
+          }
+        }
+        setTimeout(() => { (window as any).electronAPI?.hideWindow(); }, 50);
       }
-      setTimeout(() => { (window as any).electronAPI?.hideWindow(); }, 50);
     }
   };
 
@@ -199,14 +206,35 @@ function SearchBar() {
     };
   }
 
-  let activeArrow = null;
+  let pathData = "";
   if (phase === 'typing' && sourceBox && targetBox) {
-    activeArrow = { 
-      x1: sourceBox.x + sourceBox.w / 2, 
-      y1: sourceBox.y + sourceBox.h / 2, 
-      x2: targetBox.x + targetBox.w / 2, 
-      y2: targetBox.y + targetBox.h / 2 
-    };
+    // Professional Node-style Connection Line
+    const cx1 = sourceBox.x + sourceBox.w / 2;
+    const cy1 = sourceBox.y + sourceBox.h / 2;
+    const cx2 = targetBox.x + targetBox.w / 2;
+    const cy2 = targetBox.y + targetBox.h / 2;
+
+    const isHorizontal = Math.abs(cx2 - cx1) > Math.abs(cy2 - cy1);
+    
+    let startX = cx1, startY = cy1, endX = cx2, endY = cy2;
+    let cp1x = cx1, cp1y = cy1, cp2x = cx2, cp2y = cy2;
+    const padding = 6;
+    
+    if (isHorizontal) {
+      startX = cx2 > cx1 ? sourceBox.x + sourceBox.w + padding : sourceBox.x - padding;
+      endX = cx2 > cx1 ? targetBox.x - padding : targetBox.x + targetBox.w + padding;
+      const dist = Math.abs(endX - startX) * 0.5;
+      cp1x = cx2 > cx1 ? startX + dist : startX - dist;
+      cp2x = cx2 > cx1 ? endX - dist : endX + dist;
+    } else {
+      startY = cy2 > cy1 ? sourceBox.y + sourceBox.h + padding : sourceBox.y - padding;
+      endY = cy2 > cy1 ? targetBox.y - padding : targetBox.y + targetBox.h + padding;
+      const dist = Math.abs(endY - startY) * 0.5;
+      cp1y = cy2 > cy1 ? startY + dist : startY - dist;
+      cp2y = cy2 > cy1 ? endY - dist : endY + dist;
+    }
+
+    pathData = `M ${startX},${startY} C ${cp1x},${cp1y} ${cp2x},${cp2y} ${endX},${endY}`;
   }
 
   return (
@@ -216,9 +244,20 @@ function SearchBar() {
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
     >
-      {isVisible && phase !== 'running' && phase !== 'typing' && <div className="sweep-dim-bg"></div>}
-      
-      {/* 1. Instructions */}
+      {isVisible && phase !== 'running' && (
+        <svg className="sweep-dim-bg" style={{ position: 'absolute', pointerEvents: 'none', zIndex: 5 }}>
+          <defs>
+            <mask id="hole-mask">
+              <rect width="100%" height="100%" fill="white" />
+              {sourceBox && <rect x={sourceBox.x} y={sourceBox.y} width={sourceBox.w} height={sourceBox.h} fill="black" />}
+              {targetBox && <rect x={targetBox.x} y={targetBox.y} width={targetBox.w} height={targetBox.h} fill="black" />}
+              {activeBox && <rect x={activeBox.x} y={activeBox.y} width={activeBox.w} height={activeBox.h} fill="black" />}
+            </mask>
+          </defs>
+          {/* We use a slight backdrop filter equivalent color since raw SVG doesn't do backdrop-filter perfectly on some platforms */}
+          <rect width="100%" height="100%" fill="rgba(0, 0, 0, 0.75)" mask="url(#hole-mask)" />
+        </svg>
+      )}
       {isVisible && phase === 'idle' && (
         <div className="instruction-toast">Draw a bounding box around the SOURCE trigger zone</div>
       )}
@@ -227,30 +266,34 @@ function SearchBar() {
       )}
 
       {/* 2. Bounding Boxes */}
-      {sourceBox && phase !== 'running' && phase !== 'typing' && (
+      {sourceBox && phase !== 'running' && (
         <div className="drawn-box final" style={{ left: sourceBox.x, top: sourceBox.y, width: sourceBox.w, height: sourceBox.h }} />
       )}
-      {targetBox && phase !== 'running' && phase !== 'typing' && (
-        <div className="drawn-box final target" style={{ left: targetBox.x, top: targetBox.y, width: targetBox.w, height: targetBox.h, borderColor: '#3498db', boxShadow: '0 0 15px rgba(52, 152, 219, 0.3)', background: 'rgba(52, 152, 219, 0.1)' }} />
+      {targetBox && phase !== 'running' && (
+        <div className="drawn-box final target" style={{ left: targetBox.x, top: targetBox.y, width: targetBox.w, height: targetBox.h }} />
       )}
       {activeBox && phase !== 'running' && phase !== 'typing' && (
         <div className={`drawn-box drawing ${phase === 'drawing_target' ? 'target-drawing' : ''}`} style={{ left: activeBox.x, top: activeBox.y, width: activeBox.w, height: activeBox.h, borderColor: phase === 'drawing_target' ? '#3498db' : '#f39c12' }} />
       )}
 
       {/* 3. Connection Arrow */}
-      {phase !== 'running' && phase !== 'typing' && (
+      {phase !== 'running' && (
         <svg className="arrow-canvas">
           <defs>
-            <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-              <polygon points="0 0, 10 3.5, 0 7" fill="#3498db" />
+            <marker id="node-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
+              <path d="M 0 0 L 8 4 L 0 8 z" fill="rgba(255, 255, 255, 0.8)" />
             </marker>
           </defs>
-          {activeArrow && (
-            <line 
-              x1={activeArrow.x1} y1={activeArrow.y1} 
-              x2={activeArrow.x2} y2={activeArrow.y2} 
-              stroke="#3498db" strokeWidth="3" strokeDasharray="5,5"
-              markerEnd="url(#arrowhead)"            
+          {pathData && (
+            <path 
+              d={pathData}
+              fill="none"
+              stroke="rgba(255, 255, 255, 0.6)" 
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              markerEnd="url(#node-arrow)"
+              opacity="0.9"
             />
           )}
         </svg>
@@ -281,14 +324,11 @@ function SearchBar() {
 
       {/* 5. The Floating Progress Widget */}
       {phase === 'running' && (
-        <div className="status-widget">
-          <div className="widget-header">
-            <div className="widget-spinner"></div>
-            <span className="widget-title">{mode === 'now' ? 'Extracting via Gemini...' : 'Watching Condition...'}</span>
-          </div>
-          <div className="widget-subtitle">{command}</div>
-          <div className="widget-progress-container">
-            <div className="widget-progress-bar"></div>
+        <div className="minimalist-pill">
+          <div className="pill-spinner"></div>
+          <div className="pill-text-block">
+            <span className="pill-title">{mode === 'now' ? 'Extracting' : 'Watching'}</span>
+            <span className="pill-command">{command}</span>
           </div>
         </div>
       )}

@@ -51,24 +51,41 @@ def capture_window(hwnd):
         return img[:, :, :3]
     return None
 
-def click_and_type_background(hwnd, screen_x, screen_y, text):
+def click_and_type_background(hwnd, screen_x, screen_y, text_or_key):
     try:
-        # Convert to client coordinates relative to target window
-        client_point = win32gui.ScreenToClient(hwnd, (screen_x, screen_y))
-        lparam = win32api.MAKELONG(client_point[0], client_point[1])
-        
-        # Bring to foreground briefly to ensure it accepts input, but don't move mouse
-        # Sometimes apps ignore background input if they aren't active.
-        # But we'll try pure background first!
-        win32api.PostMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
-        time.sleep(0.05)
-        win32api.PostMessage(hwnd, win32con.WM_LBUTTONUP, 0, lparam)
-        time.sleep(0.1)
-        
-        for char in text:
-            # Send character directly
-            win32api.PostMessage(hwnd, win32con.WM_CHAR, ord(char), 0)
+        if screen_x is not None and screen_y is not None:
+            # Convert to client coordinates relative to target window
+            client_point = win32gui.ScreenToClient(hwnd, (screen_x, screen_y))
+            lparam = win32api.MAKELONG(client_point[0], client_point[1])
+            
+            # Background click
+            win32api.PostMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
+            time.sleep(0.05)
+            win32api.PostMessage(hwnd, win32con.WM_LBUTTONUP, 0, lparam)
+            time.sleep(0.1)
+        # SPOOF FOCUS to trick Chromium into accepting background events even if the user clicks away
+        win32api.SendMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
+        win32api.SendMessage(hwnd, win32con.WM_SETFOCUS, 0, 0)
+
+        if text_or_key == '\t':
+            # Send TAB key
+            win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_TAB, 1)
             time.sleep(0.02)
+            win32api.SendMessage(hwnd, win32con.WM_KEYUP, win32con.VK_TAB, 0xC0000001)
+        elif text_or_key == '\n':
+            # Send ENTER key
+            win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 1)
+            time.sleep(0.02)
+            win32api.SendMessage(hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0xC0000001)
+        elif text_or_key:
+            for char in text_or_key:
+                # Get the virtual key code for the character
+                vk_code = win32api.VkKeyScan(char) & 0xFF
+                # Send full keydown, char, keyup sequence to prevent Chromium caret desync
+                win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 1)
+                win32api.SendMessage(hwnd, win32con.WM_CHAR, ord(char), 1)
+                win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, 0xC0000001)
+                time.sleep(0.01)
         return True
     except Exception as e:
         print(f"Background click failed: {e}")
@@ -154,6 +171,56 @@ def watch_loop_full(task_id: str, source_bbox: dict, target_bbox: dict, conditio
     rel_x = x - orig_left
     rel_y = y - orig_top
     
+    last_extracted_text = None
+    
+    # ---------------------------------------------------------
+    # LLM COMPILER STEP
+    # ---------------------------------------------------------
+    compiled_condition = None
+    compiled_action = None
+    
+    if mode in ["when", "always"]:
+        print(f"[{task_id}] Compiling intent via LLM...")
+        compiler_prompt = f"""
+You are an expert compiler. Translate the user's natural language condition and action into raw executable logic.
+Condition: "{condition}"
+Action: "{action_text}"
+
+You must output a JSON object with exactly two keys: "condition_eval" and "action_json".
+"condition_eval": A valid Python expression that returns True if the condition is met. You have access to variables: `curr` (current OCR string) and `prev` (previous OCR string, can be None). Use `prev` for state change conditions.
+"action_json": A JSON list of objects representing the action sequence. Supported types: {{"type": "text", "value": "hello"}}, {{"type": "key", "value": "tab"}}, {{"type": "key", "value": "enter"}}.
+
+Output ONLY the raw JSON object, no markdown.
+Example 1:
+Condition: "when a new text arrives"
+Action: "type yay and send it"
+Output: {{"condition_eval": "prev is not None and curr != prev", "action_json": [{{"type": "text", "value": "yay"}}, {{"type": "key", "value": "enter"}}]}}
+
+Example 2:
+Condition: "when it says error"
+Action: "type fix"
+Output: {{"condition_eval": "'error' in curr.lower()", "action_json": [{{"type": "text", "value": "fix"}}]}}
+"""
+        try:
+            import requests, json
+            API_BASE_URL = "https://api.cloudflare.com/client/v4/accounts/895f8c7b633eccf9438f9c233b93049b/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+            headers = {"Authorization": "Bearer cfut_2KqZpUwpIsNcHK4jkgrc7mH6PuKSaubdYhD2Rmad50d12dbc"}
+            inputs = {"max_tokens": 500, "messages": [{"role": "system", "content": "You are a raw compiler. Output ONLY valid JSON."}, {"role": "user", "content": compiler_prompt}]}
+            response = requests.post(API_BASE_URL, headers=headers, json=inputs).json()
+            resp_val = response.get("result", {}).get("response", "").strip()
+            if resp_val.startswith("```json"): resp_val = resp_val[7:]
+            if resp_val.startswith("```"): resp_val = resp_val[3:]
+            if resp_val.endswith("```"): resp_val = resp_val[:-3]
+            resp_val = resp_val.strip()
+            
+            compiled_data = json.loads(resp_val)
+            compiled_condition = compiled_data.get("condition_eval")
+            compiled_action = compiled_data.get("action_json")
+            print(f"[{task_id}] LLM Compiled Condition: {compiled_condition}")
+            print(f"[{task_id}] LLM Compiled Action: {compiled_action}")
+        except Exception as e:
+            print(f"[{task_id}] Compiler Failed: {e}. Falling back to basic logic.")
+            
     while active_watchers.get(task_id, False):
         try:
             # Capture background window for ALL modes
@@ -182,14 +249,24 @@ def watch_loop_full(task_id: str, source_bbox: dict, target_bbox: dict, conditio
                         import numpy as np
                         target_text = ""
                         try:
-                            t_x1, t_y1 = target_bbox['x'], target_bbox['y']
-                            t_w, t_h = target_bbox['w'], target_bbox['h']
-                            screenshot = pyautogui.screenshot(region=(t_x1, t_y1, t_w, t_h))
-                            t_crop = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
-                            if t_crop.size > 0:
-                                target_results = global_reader.readtext(t_crop, detail=0, workers=0)
-                                target_text = " ".join(target_results)
-                                print(f"[{task_id}] Target Form Labels Extracted: '{target_text}'")
+                            # Use relative capture on target_hwnd instead of pyautogui
+                            t_img_np = capture_window(target_hwnd)
+                            if t_img_np is not None:
+                                t_orig_left, t_orig_top, _, _ = win32gui.GetWindowRect(target_hwnd)
+                                t_rel_x = target_bbox['x'] - t_orig_left
+                                t_rel_y = target_bbox['y'] - t_orig_top
+                                
+                                t_win_h, t_win_w, _ = t_img_np.shape
+                                t_crop_y1 = max(0, t_rel_y)
+                                t_crop_y2 = min(t_win_h, t_rel_y + target_bbox['h'])
+                                t_crop_x1 = max(0, t_rel_x)
+                                t_crop_x2 = min(t_win_w, t_rel_x + target_bbox['w'])
+                                
+                                t_crop = t_img_np[t_crop_y1:t_crop_y2, t_crop_x1:t_crop_x2]
+                                if t_crop.size > 0:
+                                    target_results = global_reader.readtext(t_crop, detail=0, workers=0)
+                                    target_text = " ".join(target_results)
+                                    print(f"[{task_id}] Target Form Labels Extracted: '{target_text}'")
                         except Exception as e:
                             print(f"[{task_id}] Failed to read target form: {e}")
                         
@@ -244,12 +321,21 @@ Example output: ["Alexander Wright", "awright.dev@example.com", "Stanford Univer
                             tx, ty = target_bbox['x'] + target_bbox['w'] // 2, target_bbox['y'] + target_bbox['h'] // 2
                             
                             try:
-                                t_x1, t_y1 = target_bbox['x'], target_bbox['y']
-                                t_w, t_h = target_bbox['w'], target_bbox['h']
-                                screenshot = pyautogui.screenshot(region=(t_x1, t_y1, t_w, t_h))
-                                t_crop = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
-                                
-                                if t_crop.size > 0:
+                                t_img_np = capture_window(target_hwnd)
+                                if t_img_np is not None:
+                                    t_orig_left, t_orig_top, _, _ = win32gui.GetWindowRect(target_hwnd)
+                                    t_rel_x = target_bbox['x'] - t_orig_left
+                                    t_rel_y = target_bbox['y'] - t_orig_top
+                                    
+                                    t_win_h, t_win_w, _ = t_img_np.shape
+                                    t_crop_y1 = max(0, t_rel_y)
+                                    t_crop_y2 = min(t_win_h, t_rel_y + target_bbox['h'])
+                                    t_crop_x1 = max(0, t_rel_x)
+                                    t_crop_x2 = min(t_win_w, t_rel_x + target_bbox['w'])
+                                    
+                                    t_crop = t_img_np[t_crop_y1:t_crop_y2, t_crop_x1:t_crop_x2]
+                                    
+                                    if t_crop.size > 0:
                                         gray = cv2.cvtColor(t_crop, cv2.COLOR_BGR2GRAY)
                                         # Use very low thresholds for dark mode UI
                                         edges = cv2.Canny(gray, 10, 30)
@@ -266,40 +352,35 @@ Example output: ["Alexander Wright", "awright.dev@example.com", "Stanford Univer
                                         if input_fields:
                                             input_fields.sort(key=lambda f: (f[1], f[0]))
                                             rx, ry, rw, rh = input_fields[0]
-                                            tx = t_x1 + rx + rw // 2
-                                            ty = t_y1 + ry + rh // 2
+                                            # tx, ty are relative to screen. t_crop was relative to target_bbox.
+                                            tx = target_bbox['x'] + rx + rw // 2
+                                            ty = target_bbox['y'] + ry + rh // 2
                                             print(f"[{task_id}] CV Auto-Aim engaged! Shifted click to exact FIRST input box.")
                                         else:
                                             print(f"[{task_id}] CV Auto-Aim failed to find contour. Falling back to center of target box.")
                                             # Fallback to center of the target box
-                                            tx = t_x1 + target_bbox['w'] // 2
-                                            ty = t_y1 + target_bbox['h'] // 2
+                                            tx = target_bbox['x'] + target_bbox['w'] // 2
+                                            ty = target_bbox['y'] + target_bbox['h'] // 2
                             except Exception as e:
                                 print(f"[{task_id}] CV Auto-Aim failed: {e}")
                             
-                            # Click logic
-                            try:
-                                win32gui.SetForegroundWindow(target_hwnd)
-                                time.sleep(0.2)
-                            except:
-                                pass
-                                
-                            pyautogui.click(x=tx, y=ty)
+                            # Headless Background Click and Type
+                            click_and_type_background(target_hwnd, tx, ty, "")
                             time.sleep(0.8)
                             
                             if raw_output.startswith('[') and raw_output.endswith(']'):
                                 values_to_type = json.loads(raw_output)
                                 print(f"[{task_id}] Final values to type: {values_to_type}")
                                 for i, val in enumerate(values_to_type):
-                                    # Write directly using keyboard simulation (bypasses Windows clipboard race conditions)
-                                    pyautogui.write(str(val), interval=0.01)
+                                    # Write directly using headless keyboard message queue injection
+                                    click_and_type_background(target_hwnd, None, None, str(val))
                                     if i < len(values_to_type) - 1:
                                         time.sleep(0.1)
-                                        pyautogui.press('tab')
+                                        click_and_type_background(target_hwnd, None, None, '\t')
                                         time.sleep(0.15)
                             else:
                                 print(f"[{task_id}] Fallback raw paste")
-                                pyautogui.write(raw_output, interval=0.01)
+                                click_and_type_background(target_hwnd, None, None, raw_output)
                                     
                         except Exception as e:
                             print(f"[{task_id}] Extraction Error: {e}")
@@ -308,27 +389,51 @@ Example output: ["Alexander Wright", "awright.dev@example.com", "Stanford Univer
                         break
                     
                     # For 'when' and 'always' modes
-                    extracted_text_lower = " ".join(results).lower()
+                    extracted_text_lower = " ".join(results).lower().strip()
                     print(f"[{task_id}] OCR Saw: '{extracted_text_lower}'")
                     
-                    if condition.lower() in extracted_text_lower:
-                        print(f"[{task_id}] CONDITION MET! Firing Background Strike!")
-                        
-                        print(f"[{task_id}] Firing precise physical strike at {tx}, {ty}")
+                    is_condition_met = False
+                    
+                    if compiled_condition:
                         try:
-                            win32gui.SetForegroundWindow(target_hwnd)
-                            time.sleep(0.1)
+                            # Evaluate the LLM-compiled python lambda!
+                            is_condition_met = eval(compiled_condition, {"__builtins__": {}}, {"curr": extracted_text_lower, "prev": last_extracted_text})
                         except Exception as e:
-                            print(f"SetForegroundWindow failed: {e}")
+                            print(f"[{task_id}] Compiled condition eval failed: {e}")
+                    else:
+                        # Fallback basic logic
+                        cond_clean = condition.lower().strip()
+                        state_change_phrases = ["it changes", "when it changes", "new text arrives", "when new text arrives", "a new text arrives", "when a new text arrives"]
+                        if cond_clean in state_change_phrases:
+                            if last_extracted_text is not None and extracted_text_lower != last_extracted_text and extracted_text_lower != "":
+                                is_condition_met = True
+                        elif cond_clean in extracted_text_lower:
+                            is_condition_met = True
+                            
+                    last_extracted_text = extracted_text_lower
+                    
+                    if is_condition_met:
+                        print(f"[{task_id}] CONDITION MET! Firing Background Strike!")
+                        print(f"[{task_id}] Firing invisible background strike at {tx}, {ty}")
                         
-                        win32api.SetCursorPos((tx, ty))
-                        time.sleep(0.1)
-                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, tx, ty, 0, 0)
-                        time.sleep(0.05)
-                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, tx, ty, 0, 0)
-                        time.sleep(0.1)
-                        
-                        pyautogui.write(action_text, interval=0.02)
+                        if compiled_action:
+                            # Execute the LLM-compiled action sequence
+                            for act in compiled_action:
+                                if act.get("type") == "text":
+                                    click_and_type_background(target_hwnd, tx, ty, act.get("value", ""))
+                                elif act.get("type") == "key":
+                                    k = act.get("value", "").lower()
+                                    if k == "enter":
+                                        click_and_type_background(target_hwnd, tx, ty, "\n")
+                                    elif k == "tab":
+                                        click_and_type_background(target_hwnd, tx, ty, "\t")
+                                time.sleep(0.1)
+                        else:
+                            # Fallback basic logic
+                            final_action = action_text
+                            if final_action.lower().endswith(" and send it"):
+                                final_action = final_action[:-12].strip() + "\n"
+                            click_and_type_background(target_hwnd, tx, ty, final_action)
                         
                         if mode == "always":
                             print(f"[{task_id}] Mode=Always. Entering 5-second cooldown before looping...")

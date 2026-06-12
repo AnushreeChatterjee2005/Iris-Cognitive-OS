@@ -42,16 +42,19 @@ class WatchAndStrikeRequest(BaseModel):
 
 @app.post("/api/watch-and-strike")
 async def setup_watch_and_strike(req: WatchAndStrikeRequest):
+    import asyncio
     task_id = str(uuid.uuid4())
+    
     if req.mode == "now":
         watcher.active_watchers[task_id] = True
-        watcher.watch_loop_full(
-            task_id=task_id,
-            source_bbox=req.source_bbox.model_dump(),
-            target_bbox=req.target_bbox.model_dump(),
-            condition=req.condition,
-            action_text=req.action_text,
-            mode=req.mode
+        await asyncio.to_thread(
+            watcher.watch_loop_full,
+            task_id,
+            req.source_bbox.model_dump(),
+            req.target_bbox.model_dump(),
+            req.condition,
+            req.action_text,
+            req.mode
         )
         return {"status": "success", "task_id": task_id, "message": "Extraction complete."}
     else:

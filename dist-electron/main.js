@@ -3,8 +3,8 @@ import * as a from "path";
 import { fileURLToPath as o } from "url";
 import * as s from "fs";
 //#region electron/main.ts
-var c = a.dirname(o(import.meta.url)), l = null, u = null;
-function d() {
+var c = a.dirname(o(import.meta.url)), l = null, u = null, d = !1;
+function f() {
 	l = new e({
 		width: 1e3,
 		height: 700,
@@ -17,7 +17,7 @@ function d() {
 		l = null;
 	});
 }
-function f() {
+function p() {
 	let { width: n, height: r } = i.getPrimaryDisplay().workAreaSize;
 	u = new e({
 		width: n,
@@ -35,29 +35,31 @@ function f() {
 			contextIsolation: !0
 		}
 	}), t.isPackaged ? u.loadFile(a.join(c, "../dist/index.html"), { hash: "/search" }) : u.loadURL("http://localhost:5173/#/search"), u.on("blur", () => {
-		u?.webContents.executeJavaScript("window.dispatchEvent(new Event('electron-window-hidden'))").catch(console.error), setTimeout(() => {
+		d || (u?.webContents.executeJavaScript("window.dispatchEvent(new Event('electron-window-hidden'))").catch(console.error), setTimeout(() => {
 			u?.hide();
-		}, 50);
+		}, 50));
 	}), u.on("closed", () => {
 		u = null;
 	});
 }
 t.whenReady().then(() => {
-	d(), f(), n.register("CommandOrControl+K", () => {
+	f(), p(), n.register("CommandOrControl+K", () => {
 		u && (u.isVisible() ? (u.webContents.executeJavaScript("window.dispatchEvent(new Event('electron-window-hidden'))").catch(console.error), setTimeout(() => {
 			u?.hide();
 		}, 50)) : (u.show(), u.focus(), u.webContents.executeJavaScript("window.dispatchEvent(new Event('electron-window-shown'))").catch(console.error)));
 	}) || console.log("registration failed"), t.on("activate", () => {
-		e.getAllWindows().length === 0 && (d(), f());
+		e.getAllWindows().length === 0 && (f(), p());
 	});
 }), t.on("window-all-closed", () => {
 	process.platform !== "darwin" && t.quit();
 }), t.on("will-quit", () => {
 	n.unregisterAll();
 }), r.on("hide-window", () => {
-	u && (u.blur(), u.hide());
+	u && u.hide();
 }), r.on("set-click-through", (e, t) => {
-	u && (t ? u.setIgnoreMouseEvents(!0, { forward: !0 }) : u.setIgnoreMouseEvents(!1));
+	u && u.setIgnoreMouseEvents(t, { forward: !0 });
+}), r.on("set-ignore-blur", (e, t) => {
+	d = t;
 }), r.handle("read-workspace-files", async () => {
 	let e = process.cwd(), t = [];
 	function n(e, t) {
