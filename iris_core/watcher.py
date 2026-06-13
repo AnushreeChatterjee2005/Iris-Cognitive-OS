@@ -153,7 +153,13 @@ log_to_file("Loading Global EasyOCR Model...")
 global_reader = easyocr.Reader(['en'], gpu=False)
 log_to_file("Global OCR Model loaded.")
 
-GROQ_API_KEY = "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"
+import os
+from dotenv import load_dotenv
+
+# Load env variables from the root .env file
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 groq_client = Groq(api_key=GROQ_API_KEY)
 
 class GroqResponse:

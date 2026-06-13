@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import './dashboard.css';
 import { CanvasGrid } from './CanvasGrid';
+import { TimelineAgent } from './ai/timelineAgent';
 
 export default function App() {
   const [sessions, setSessions] = useState<any[]>([]);
@@ -10,61 +11,44 @@ export default function App() {
     { role: 'agent', text: 'Hello! I am your autonomous agent. I am silently capturing your workflow context. Ask me anything about what you were doing or what files you were editing!' }
   ]);
   const [chatInput, setChatInput] = useState('');
+  const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY || '');
+  const [isAiTyping, setIsAiTyping] = useState(false);
 
-  const handleChatSubmit = () => {
+  const handleChatSubmit = async () => {
     if (!chatInput.trim()) return;
     const userMsg = chatInput.trim();
     setChatHistory(prev => [...prev, { role: 'user', text: userMsg }]);
     setChatInput('');
 
-    setTimeout(() => {
-      const lowerQ = userMsg.toLowerCase();
-      let responseText = "I checked your ambient timeline, but I couldn't find a direct match. Can you be more specific?";
-      let sessionContext: any = null;
-      let matchedUrl: string | undefined;
-      let matchedFile: string | undefined;
-      let actions: any[] = [];
+    setIsAiTyping(true);
 
-      // Extract meaningful words from the query (ignore common stop words)
-      const stopWords = ['what', 'was', 'i', 'working', 'on', 'any', 'the', 'a', 'in', 'of', 'for', 'about', 'did', 'do', 'were'];
-      const keywords = lowerQ.split(/[\s?.,]+/).filter(w => w.length > 2 && !stopWords.includes(w));
-
-      // Try to find a session that matches the keywords
-      let bestSession = null;
-      let maxScore = 0;
-
-      for (const s of sessions) {
-        let score = 0;
-        const searchSpace = `${s.name || ''} ${s.contextSummary || ''} ${s.dominantApps?.join(' ') || ''} ${s.urls?.join(' ') || ''} ${s.files?.join(' ') || ''}`.toLowerCase();
-        
-        for (const kw of keywords) {
-          if (searchSpace.includes(kw)) {
-            score++;
-          }
-        }
-        
-        if (score > maxScore) {
-          maxScore = score;
-          bestSession = s;
-        }
+    try {
+      if (!apiKey) {
+        setChatHistory(prev => [...prev, { role: 'agent', text: "Please enter your Gemini API Key in the box below to activate my AI brain!" }]);
+        setIsAiTyping(false);
+        return;
       }
 
-      if (bestSession && maxScore > 0) {
-        sessionContext = bestSession;
-        matchedUrl = bestSession.urls && bestSession.urls.length > 0 ? bestSession.urls[0] : undefined;
-        matchedFile = bestSession.files && bestSession.files.length > 0 ? bestSession.files[0] : undefined;
+      const agent = new TimelineAgent(apiKey);
+      const result = await agent.generateResponse(userMsg, sessions);
 
-        responseText = `I found a match in your ambient timeline! Shall I restore the entire environment, or just open the specific resource?`;
-        
+      let actions: any[] = [];
+      let matchedUrl: string | undefined;
+      let matchedFile: string | undefined;
+
+      if (result.sessionContext) {
+        matchedUrl = result.sessionContext.urls && result.sessionContext.urls.length > 0 ? result.sessionContext.urls[0] : undefined;
+        matchedFile = result.sessionContext.files && result.sessionContext.files.length > 0 ? result.sessionContext.files[0] : undefined;
+
         actions.push({ 
-          ...bestSession, 
+          ...result.sessionContext, 
           label: `Restore Entire Environment`,
           icon: '⚡'
         });
         
         if (matchedUrl) {
           actions.push({
-            ...bestSession,
+            ...result.sessionContext,
             files: [], windowTitles: [], urls: [matchedUrl],
             label: `Open Link Only`,
             icon: '↗️'
@@ -73,25 +57,27 @@ export default function App() {
         
         if (matchedFile) {
           actions.push({
-            ...bestSession,
+            ...result.sessionContext,
             urls: [], windowTitles: [], files: [matchedFile],
             label: `Open File Only`,
             icon: '📄'
           });
         }
-      } else if (lowerQ.includes('file') || lowerQ.includes('editing')) {
-        const fileSession = sessions.find(s => s.files && s.files.length > 0);
-        if (fileSession) {
-          sessionContext = fileSession;
-          matchedFile = fileSession.files[0];
-          responseText = `I found a match in your timeline! Shall I restore the environment or open the file?`;
-          actions.push({ ...fileSession, label: `Restore Environment`, icon: '⚡' });
-          actions.push({ ...fileSession, urls: [], windowTitles: [], files: [matchedFile], label: `Open File Only`, icon: '📄' });
-        }
       }
 
-      setChatHistory(prev => [...prev, { role: 'agent', text: responseText, sessionContext, matchedUrl, matchedFile, actions }]);
-    }, 1000);
+      setChatHistory(prev => [...prev, { 
+        role: 'agent', 
+        text: result.text, 
+        sessionContext: result.sessionContext, 
+        matchedUrl, 
+        matchedFile, 
+        actions 
+      }]);
+    } catch (e: any) {
+      setChatHistory(prev => [...prev, { role: 'agent', text: `**System Error:** ${e.message}` }]);
+    } finally {
+      setIsAiTyping(false);
+    }
   };
 
   useEffect(() => {
@@ -140,9 +126,10 @@ export default function App() {
   let trails: any[] = [];
   if (activeSession) {
     if (activeSession.urls) {
-      activeSession.urls.forEach((url: string) => {
+      const uniqueUrls = Array.from(new Set(activeSession.urls));
+      uniqueUrls.forEach((url: any) => {
         try {
-          const u = new URL(url);
+          const u = new URL(url as string);
           const domain = u.hostname.replace('www.', '');
           let group = trails.find(t => t.type === 'domain_group' && t.domain === domain);
           if (!group) {
@@ -162,18 +149,19 @@ export default function App() {
     const primaryIde = apps.find(a => a && ['VS Code', 'Cursor', 'Antigravity'].some(ide => (a as string).includes(ide)));
 
     if (activeSession.files && activeSession.files.length > 0) {
+      const uniqueFiles = Array.from(new Set(activeSession.files));
       if (primaryIde) {
         trails.push({
           type: 'ide_group',
           ide: primaryIde,
-          files: activeSession.files.map((f: string) => ({
-            title: f.split(/[\\/]/).pop() || f,
+          files: uniqueFiles.map((f: any) => ({
+            title: (f as string).split(/[\\/]/).pop() || f,
             value: f
           }))
         });
       } else {
-        activeSession.files.forEach((f: string) => {
-          const title = f.split(/[\\/]/).pop() || f;
+        uniqueFiles.forEach((f: any) => {
+          const title = (f as string).split(/[\\/]/).pop() || f;
           trails.push({ type: 'file', title, summary: f, icon: '📄' });
         });
       }
@@ -414,7 +402,7 @@ export default function App() {
               <div className="chat-history">
                 {chatHistory.map((msg, i) => (
                   <div key={i} className={`chat-message ${msg.role}`}>
-                    <div className="chat-text">{msg.text}</div>
+                    <div className="chat-text" dangerouslySetInnerHTML={{ __html: msg.text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }} />
                     
                     {msg.sessionContext && (
                       <div className="chat-context-card">
@@ -448,7 +436,7 @@ export default function App() {
                 <input 
                   type="text" 
                   className="chat-input" 
-                  placeholder="Ask IRIS about your workflow... (e.g. 'What file was I editing?')" 
+                  placeholder={isAiTyping ? "IRIS is thinking..." : "Ask IRIS about your workflow... (e.g. 'What file was I editing?')"} 
                   value={chatInput} 
                   onChange={e => setChatInput(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') handleChatSubmit(); }}

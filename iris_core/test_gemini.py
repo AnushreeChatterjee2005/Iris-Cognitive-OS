@@ -1,9 +1,14 @@
 import google.generativeai as genai
 import sys
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+
 try:
-    genai.configure(api_key="AQ.Ab8RN6LzEPJnTWzG21u7fh-s1kKGTzxE0JYNzg1Aicox2Ck5jQ")
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    genai.configure(api_key=os.environ.get("VITE_GEMINI_API_KEY"))
+    model = genai.GenerativeModel('gemini-2.5-flash')
     response = model.generate_content("Hello")
     print(response.text)
 except Exception as e:
