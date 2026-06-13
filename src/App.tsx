@@ -1,446 +1,280 @@
-import { useState, useEffect, useRef } from 'react';
-import { HashRouter, Routes, Route } from 'react-router-dom';
-import { IntentParser } from './ai/intentParser';
-import { env } from '@xenova/transformers';
-import './index.css';
+import { useState, useEffect } from 'react';
+import { CanvasGrid } from './CanvasGrid';
+import './dashboard.css';
 
-// Fix WASM deadlocks in Chromium by forcing single-threaded mode for UI embedding
-env.backends.onnx.wasm.numThreads = 1;
-
-// Fix WASM deadlocks in Chromium by forcing single-threaded mode for UI embedding
-env.backends.onnx.wasm.numThreads = 1;
-
-// Pre-warm the model in the browser background
-IntentParser.init();
-
-// ----------------------------------------------------
-// 1. The Overlay Command Bar (Ctrl+Shift+Space window)
-// ----------------------------------------------------
-type Point = { x: number, y: number };
-type Box = { x: number, y: number, w: number, h: number };
-
-function SearchBar() {
-  const [isVisible, setIsVisible] = useState(false);
-  const [phase, setPhase] = useState<'idle' | 'drawing_source' | 'drawing_target' | 'typing' | 'running'>('idle');
-  
-  const [startPoint, setStartPoint] = useState<Point | null>(null);
-  const [currentPoint, setCurrentPoint] = useState<Point | null>(null);
-  
-  const [sourceBox, setSourceBox] = useState<Box | null>(null);
-  const [targetBox, setTargetBox] = useState<Box | null>(null);
-  const [command, setCommand] = useState('');
-  const [mode, setMode] = useState<'now' | 'when' | 'always'>('when');
-
-  const inputRef = useRef<HTMLInputElement>(null);
+export default function App() {
+  const [sessions, setSessions] = useState<any[]>([]);
+  const [activeSession, setActiveSession] = useState<any | null>(null);
 
   useEffect(() => {
-    const handleShown = () => {
-      setIsVisible(true);
-      setPhase('idle');
-      setSourceBox(null);
-      setTargetBox(null);
-      setCommand('');
-      setMode('when');
-      if ((window as any).electronAPI && (window as any).electronAPI.setClickThrough) {
-        (window as any).electronAPI.setClickThrough(false);
-      }
-    };
+    if ((window as any).electronAPI && (window as any).electronAPI.onWorkflowUpdate) {
+      (window as any).electronAPI.onWorkflowUpdate((update: any) => {
+        setSessions(prev => {
+          const idx = prev.findIndex(s => s.id === update.id);
+          if (idx >= 0) {
+            const newSessions = [...prev];
+            newSessions[idx] = update;
+            return newSessions;
+          }
+          return [update, ...prev];
+        });
+        setActiveSession(prev => (prev && prev.id === update.id) || !prev ? update : prev);
+      });
+    }
 
-    const handleHidden = () => {
-      setIsVisible(false);
-      setPhase('idle');
+    // Dummy data for development
+    const dummy = {
+      id: 'dummy-101',
+      name: 'Ambient Context Simulator (Test Session)',
+      startTime: Date.now() - 3600000,
+      duration: 3600000,
+      dominantApps: ['Codex', 'Chrome', 'Terminal'],
+      urls: ['https://github.com/iris', 'https://chatgpt.com'],
+      files: ['c:\\Projects\\IRIS\\App.tsx'],
+      contextSummary: 'Exploring IRIS Cinematic Overlays while cross-referencing GitHub.'
     };
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsVisible(false);
-        setTimeout(() => { (window as any).electronAPI?.hideWindow(); }, 50);
-      }
-    };
-    
-    window.addEventListener('electron-window-shown', handleShown as EventListener);
-    window.addEventListener('electron-window-hidden', handleHidden as EventListener);
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('electron-window-shown', handleShown as EventListener);
-      window.removeEventListener('electron-window-hidden', handleHidden as EventListener);
-      window.removeEventListener('keydown', handleKeyDown);
-    };
+    setSessions([dummy]);
+    setActiveSession(dummy);
   }, []);
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (phase === 'idle') {
-      setStartPoint({ x: e.clientX, y: e.clientY });
-      setCurrentPoint({ x: e.clientX, y: e.clientY });
-      setPhase('drawing_source');
-    } else if (phase === 'drawing_target') {
-      setStartPoint({ x: e.clientX, y: e.clientY });
-      setCurrentPoint({ x: e.clientX, y: e.clientY });
-    }
+  const formatAppName = (app: string) => {
+    if (!app) return '';
+    const lower = app.toLowerCase().replace('.exe', '');
+    if (lower.includes('chrome')) return 'Chrome';
+    if (lower.includes('code') || lower.includes('visual studio')) return 'VS Code';
+    if (lower.includes('snipping')) return 'Snipping Tool';
+    if (lower.includes('discord')) return 'Discord';
+    if (lower.includes('antigravity')) return 'Antigravity';
+    if (lower.includes('terminal') || lower.includes('powershell') || lower.includes('cmd')) return 'Terminal';
+    if (lower.includes('explorer')) return 'File Explorer';
+    
+    // Default: capitalize
+    return app.replace('.exe', '').split(/(?=[A-Z])|[\s_-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (phase === 'drawing_source' || phase === 'drawing_target') {
-      setCurrentPoint({ x: e.clientX, y: e.clientY });
-    }
-  };
-
-  const handleMouseUp = () => {
-    if (!startPoint || !currentPoint) return;
-    
-    const x = Math.min(startPoint.x, currentPoint.x);
-    const y = Math.min(startPoint.y, currentPoint.y);
-    const w = Math.abs(startPoint.x - currentPoint.x);
-    const h = Math.abs(startPoint.y - currentPoint.y);
-    
-    if (phase === 'drawing_source') {
-      if (w > 10 && h > 10) {
-        setSourceBox({ x, y, w, h });
-        setPhase('drawing_target');
-      } else {
-        setPhase('idle');
-      }
-    } else if (phase === 'drawing_target') {
-      if (w > 10 && h > 10) {
-        setTargetBox({ x, y, w, h });
-        setPhase('typing');
-        setTimeout(() => inputRef.current?.focus(), 100);
-      } else {
-        setPhase('drawing_target');
-      }
-    }
-    setStartPoint(null);
-    setCurrentPoint(null);
-  };
-
-  const executeWatchAndStrike = async () => {
-    const finalCommand = command.trim() || (mode === 'now' ? 'extract' : '');
-    if (!sourceBox || !targetBox || !finalCommand) return;
-    
-    // Switch to running phase to show the widget
-    setPhase('running');
-    
-    // Make the transparent overlay click-through so user can interact with the app below
-    if ((window as any).electronAPI && (window as any).electronAPI.setClickThrough) {
-      (window as any).electronAPI.setClickThrough(true);
-      if ((window as any).electronAPI.setIgnoreBlur) {
-        (window as any).electronAPI.setIgnoreBlur(true);
-      }
-    }
-    
-    // Robust Regex Parsing
-    const conditionPart = finalCommand.split('then')[0] || finalCommand;
-    const conditionStr = conditionPart
-      .replace(/when (this|it) (says|changes to) /i, '')
-      .replace(/['"]/g, '')
-      .trim();
-    
-    const actionPart = finalCommand.split(/type /i)[1] || finalCommand;
-    const actionStr = actionPart
-      .replace(/here/i, '')
-      .replace(/['"]/g, '')
-      .trim();
-
-    try {
-      const dpr = window.devicePixelRatio || 1;
-      await fetch('http://127.0.0.1:8000/api/watch-and-strike', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_bbox: { x: Math.round(sourceBox.x * dpr), y: Math.round(sourceBox.y * dpr), w: Math.round(sourceBox.w * dpr), h: Math.round(sourceBox.h * dpr) },
-          target_bbox: { x: Math.round(targetBox.x * dpr), y: Math.round(targetBox.y * dpr), w: Math.round(targetBox.w * dpr), h: Math.round(targetBox.h * dpr) },
-          condition: conditionStr.toLowerCase(),
-          action_text: actionStr,
-          mode: mode
-        })
+  let trails: any[] = [];
+  if (activeSession) {
+    if (activeSession.urls) {
+      activeSession.urls.forEach((url: string) => {
+        try {
+          const u = new URL(url);
+          const domain = u.hostname.replace('www.', '');
+          let group = trails.find(t => t.type === 'domain_group' && t.domain === domain);
+          if (!group) {
+            group = { type: 'domain_group', domain, nodes: [] };
+            trails.push(group);
+          }
+          group.nodes.push({
+            title: u.pathname === '/' ? domain : u.pathname,
+            value: url
+          });
+        } catch (e) {}
       });
-
-      if (mode === 'now') {
-        // Close instantly when Python script finishes pasting
-        setIsVisible(false);
-        setPhase('idle');
-        if ((window as any).electronAPI && (window as any).electronAPI.setClickThrough) {
-          (window as any).electronAPI.setClickThrough(false);
-          if ((window as any).electronAPI.setIgnoreBlur) {
-            (window as any).electronAPI.setIgnoreBlur(false);
-          }
+    }
+    if (activeSession.files) {
+      activeSession.files.forEach((f: string) => {
+        const title = f.split(/[\\/]/).pop() || f;
+        trails.push({ type: 'file', title, summary: f, icon: '📄' });
+      });
+    }
+    if (activeSession.dominantApps) {
+      const uniqueApps = Array.from(new Set(activeSession.dominantApps.map((a: string) => formatAppName(a))));
+      uniqueApps.forEach((app: string) => {
+        const lower = app.toLowerCase();
+        if (app && lower !== 'chrome' && lower !== 'browser') {
+          trails.push({ type: 'app', title: app, summary: `Active workspace: ${app}`, icon: '💻' });
         }
-        setTimeout(() => { (window as any).electronAPI?.hideWindow(); }, 50);
-      } else {
-        // Leave the window open! The status widget will slide to the corner and act as a background indicator.
-        // The user can interact with their PC since setClickThrough(true) is already set!
-        console.log("Background watcher active. Widget will remain on screen.");
-      }
-
-    } catch (e) {
-      console.error(e);
-      if (mode === 'now') {
-        // Fallback close on error
-        setIsVisible(false);
-        setPhase('idle');
-        if ((window as any).electronAPI && (window as any).electronAPI.setClickThrough) {
-          (window as any).electronAPI.setClickThrough(false);
-          if ((window as any).electronAPI.setIgnoreBlur) {
-            (window as any).electronAPI.setIgnoreBlur(false);
-          }
-        }
-        setTimeout(() => { (window as any).electronAPI?.hideWindow(); }, 50);
-      }
+      });
     }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      executeWatchAndStrike();
-    }
-  };
-
-  // Rendering helpers
-  let activeBox = null;
-  if ((phase === 'drawing_source' || phase === 'drawing_target') && startPoint && currentPoint) {
-    activeBox = {
-      x: Math.min(startPoint.x, currentPoint.x),
-      y: Math.min(startPoint.y, currentPoint.y),
-      w: Math.abs(startPoint.x - currentPoint.x),
-      h: Math.abs(startPoint.y - currentPoint.y),
-    };
-  }
-
-  let pathData = "";
-  if (phase === 'typing' && sourceBox && targetBox) {
-    // Professional Node-style Connection Line
-    const cx1 = sourceBox.x + sourceBox.w / 2;
-    const cy1 = sourceBox.y + sourceBox.h / 2;
-    const cx2 = targetBox.x + targetBox.w / 2;
-    const cy2 = targetBox.y + targetBox.h / 2;
-
-    const isHorizontal = Math.abs(cx2 - cx1) > Math.abs(cy2 - cy1);
-    
-    let startX = cx1, startY = cy1, endX = cx2, endY = cy2;
-    let cp1x = cx1, cp1y = cy1, cp2x = cx2, cp2y = cy2;
-    const padding = 6;
-    
-    if (isHorizontal) {
-      startX = cx2 > cx1 ? sourceBox.x + sourceBox.w + padding : sourceBox.x - padding;
-      endX = cx2 > cx1 ? targetBox.x - padding : targetBox.x + targetBox.w + padding;
-      const dist = Math.abs(endX - startX) * 0.5;
-      cp1x = cx2 > cx1 ? startX + dist : startX - dist;
-      cp2x = cx2 > cx1 ? endX - dist : endX + dist;
-    } else {
-      startY = cy2 > cy1 ? sourceBox.y + sourceBox.h + padding : sourceBox.y - padding;
-      endY = cy2 > cy1 ? targetBox.y - padding : targetBox.y + targetBox.h + padding;
-      const dist = Math.abs(endY - startY) * 0.5;
-      cp1y = cy2 > cy1 ? startY + dist : startY - dist;
-      cp2y = cy2 > cy1 ? endY - dist : endY + dist;
-    }
-
-    pathData = `M ${startX},${startY} C ${cp1x},${cp1y} ${cp2x},${cp2y} ${endX},${endY}`;
   }
 
   return (
-    <div 
-      className={`watch-overlay ${isVisible ? 'active' : ''}`}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-    >
-      {isVisible && phase !== 'running' && (
-        <svg className="sweep-dim-bg" style={{ position: 'absolute', pointerEvents: 'none', zIndex: 5 }}>
-          <defs>
-            <mask id="hole-mask">
-              <rect width="100%" height="100%" fill="white" />
-              {sourceBox && <rect x={sourceBox.x} y={sourceBox.y} width={sourceBox.w} height={sourceBox.h} fill="black" />}
-              {targetBox && <rect x={targetBox.x} y={targetBox.y} width={targetBox.w} height={targetBox.h} fill="black" />}
-              {activeBox && <rect x={activeBox.x} y={activeBox.y} width={activeBox.w} height={activeBox.h} fill="black" />}
-            </mask>
-          </defs>
-          {/* We use a slight backdrop filter equivalent color since raw SVG doesn't do backdrop-filter perfectly on some platforms */}
-          <rect width="100%" height="100%" fill="rgba(0, 0, 0, 0.75)" mask="url(#hole-mask)" />
-        </svg>
-      )}
-      {isVisible && phase === 'idle' && (
-        <div className="instruction-toast">Draw a bounding box around the SOURCE trigger zone</div>
-      )}
-      {phase === 'drawing_target' && (
-        <div className="instruction-toast">Draw a bounding box around the TARGET input field</div>
-      )}
-
-      {/* 2. Bounding Boxes */}
-      {sourceBox && phase !== 'running' && (
-        <div className="drawn-box final" style={{ left: sourceBox.x, top: sourceBox.y, width: sourceBox.w, height: sourceBox.h }} />
-      )}
-      {targetBox && phase !== 'running' && (
-        <div className="drawn-box final target" style={{ left: targetBox.x, top: targetBox.y, width: targetBox.w, height: targetBox.h }} />
-      )}
-      {activeBox && phase !== 'running' && phase !== 'typing' && (
-        <div className={`drawn-box drawing ${phase === 'drawing_target' ? 'target-drawing' : ''}`} style={{ left: activeBox.x, top: activeBox.y, width: activeBox.w, height: activeBox.h, borderColor: phase === 'drawing_target' ? '#3498db' : '#f39c12' }} />
-      )}
-
-      {/* 3. Connection Arrow */}
-      {phase !== 'running' && (
-        <svg className="arrow-canvas">
-          <defs>
-            <marker id="node-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
-              <path d="M 0 0 L 8 4 L 0 8 z" fill="rgba(255, 255, 255, 0.8)" />
-            </marker>
-          </defs>
-          {pathData && (
-            <path 
-              d={pathData}
-              fill="none"
-              stroke="rgba(255, 255, 255, 0.6)" 
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              markerEnd="url(#node-arrow)"
-              opacity="0.9"
-            />
-          )}
-        </svg>
-      )}
-
-      {/* 4. Command Input */}
-      {phase === 'typing' && targetBox && (
-        <div className="command-floater" style={{ 
-          left: Math.max(200, Math.min(targetBox.x, window.innerWidth - 200)), 
-          top: Math.max(160, targetBox.y - 20) 
-        }}>
-          <div className="mode-selector">
-            <span className={`mode-btn ${mode === 'now' ? 'active' : ''}`} onClick={() => setMode('now')}>⚡ Now</span>
-            <span className={`mode-btn ${mode === 'when' ? 'active' : ''}`} onClick={() => setMode('when')}>⏳ When</span>
-            <span className={`mode-btn ${mode === 'always' ? 'active' : ''}`} onClick={() => setMode('always')}>♾️ Always</span>
+    <div className="iris-dashboard-scope">
+      <CanvasGrid />
+      <div className="global-layout">
+        <aside className="global-sidebar">
+          <div className="sidebar-top">
+            <div className="sidebar-logo">I</div>
           </div>
-          <input
-            ref={inputRef}
-            type="text"
-            className="command-input"
-            placeholder={mode === 'now' ? "e.g. Extract the Vendor Name and Amount" : "e.g. When this says 'Success', type 'Done' here"}
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-        </div>
-      )}
-
-      {/* 5. The Floating Progress Widget */}
-      {phase === 'running' && (
-        <div className="minimalist-pill">
-          <div className="pill-spinner"></div>
-          <div className="pill-text-block">
-            <span className="pill-title">{mode === 'now' ? 'Extracting' : 'Watching'}</span>
-            <span className="pill-command">{command}</span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ----------------------------------------------------
-// 2. The Main Dashboard (The Electron App)
-// ----------------------------------------------------
-function Dashboard() {
-  return (
-    <div className="dashboard-container">
-      {/* Decorative Blueprint Lines */}
-      <div className="blueprint-grid"></div>
-
-      <nav className="sidebar">
-        <div className="sidebar-brand">
-          <div className="brand-logo">
-            <div className="logo-ring"></div>
-            <div className="logo-dot"></div>
-          </div>
-          <h2>IRIS_OS</h2>
-        </div>
-        
-        <div className="nav-section">
-          <span className="nav-label">SYSTEM_NODES</span>
-          <ul className="nav-links">
-            <li className="active"><span className="bracket">[</span> Memory Matrix <span className="bracket">]</span></li>
-            <li><span className="bracket">[</span> File Indexer <span className="bracket">]</span></li>
-            <li><span className="bracket">[</span> Automations <span className="bracket">]</span></li>
-            <li><span className="bracket">[</span> Config <span className="bracket">]</span></li>
-          </ul>
-        </div>
-
-        <div className="system-status">
-          <div className="status-indicator online"></div>
-          <span>NEURAL LINK: ONLINE</span>
-        </div>
-      </nav>
-
-      <main className="dashboard-content">
-        <header className="dash-header">
-          <div className="header-meta">UPTIME: 04:12:00 | LATENCY: 12ms</div>
-          <h1>COGNITIVE HUB</h1>
-        </header>
-        
-        <div className="exceptional-grid">
-          {/* Main Visualizer */}
-          <div className="visualizer-card panel-glass">
-            <div className="panel-header">REAL-TIME WORKFLOW TOPOLOGY</div>
-            <div className="topology-container">
-              {/* Fake CSS-based Node Graph */}
-              <div className="node center-node">
-                <div className="node-pulse"></div>
-              </div>
-              <div className="node sub-node node-1"></div>
-              <div className="node sub-node node-2"></div>
-              <div className="node sub-node node-3"></div>
-              <svg className="node-lines" viewBox="0 0 100 100">
-                <line x1="50" y1="50" x2="20" y2="20" />
-                <line x1="50" y1="50" x2="80" y2="30" />
-                <line x1="50" y1="50" x2="50" y2="80" />
+          <div className="sidebar-nav">
+            <div className="nav-item active" title="Timeline (Sessions)">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+            </div>
+            <div className="nav-item" title="Memory Search">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
               </svg>
             </div>
           </div>
-
-          {/* Activity Stream */}
-          <div className="activity-card panel-glass">
-            <div className="panel-header">INTENT STREAM</div>
-            <div className="terminal-log">
-              <p><span className="time">[10:42:01]</span> <span className="log-action">PARSING:</span> "Split terminal and browser"</p>
-              <p><span className="time">[10:42:02]</span> <span className="log-success">ROUTED:</span> Window Manager Active</p>
-              <p><span className="time">[10:45:11]</span> <span className="log-action">INDEXING:</span> c:/projects/hackathon</p>
-              <p className="typing-cursor">_</p>
+          <div className="sidebar-bottom">
+            <div className="status-badge" style={{ display: 'flex', gap: '8px', alignItems: 'center', background: 'none', border: 'none', padding: 0 }} title="Ambient tracking active">
+              <div className="pulse"></div>
             </div>
           </div>
+        </aside>
 
-          {/* Stats */}
-          <div className="stats-card panel-glass">
-            <div className="panel-header">SYSTEM INTELLIGENCE</div>
-            <div className="stat-row">
-              <span className="stat-label">ACTIONS LEARNED</span>
-              <span className="stat-val">1,024</span>
-            </div>
-            <div className="stat-row">
-              <span className="stat-label">FILES MAPPED</span>
-              <span className="stat-val">14.2k</span>
-            </div>
-            <div className="stat-row">
-              <span className="stat-label">CONFIDENCE AVG</span>
-              <span className="stat-val highlight">98.4%</span>
+        <div className="views-container">
+          <div id="view-timeline" className="app-view active">
+            <header>
+              <div className="brand-container">
+                <h1>Timeline</h1>
+              </div>
+            </header>
+            <div id="app-workspace">
+              <div id="sessions-list-container">
+                <div id="sessions-container">
+                  {sessions.length === 0 ? (
+                    <div className="empty-state">
+                      <div className="loader"></div>
+                      <p style={{ marginBottom: '8px', fontSize: '1.1rem', color: 'var(--text-primary)' }}>Synchronizing Cognitive State</p>
+                      <p style={{ maxWidth: '300px', fontSize: '0.85rem' }}>IRIS is monitoring your ambient workflow. Switch to Chrome or VS Code to begin sessionization.</p>
+                    </div>
+                  ) : (
+                    sessions.map(s => (
+                      <div key={s.id} className={`session-card ${activeSession?.id === s.id ? 'active-card' : ''}`} onClick={() => setActiveSession(s)}>
+                        <div className="session-header">
+                          <div className="session-name">{s.name}</div>
+                          <div className="session-time">{Math.floor(s.duration / 60000)}m</div>
+                        </div>
+                        <div className="session-summary">{s.contextSummary || 'Synthesizing local cognitive trail patterns...'}</div>
+                        <div className="app-tags">
+                          {s.dominantApps && Array.from(new Set(s.dominantApps.map((a: string) => formatAppName(a)))).map((app: string) => (
+                            <span key={app} className="app-tag">{app}</span>
+                          ))}
+                        </div>
+                        {activeSession?.id === s.id && (
+                          <div className="live-pulse"></div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+              <div id="session-detail-panel">
+                {activeSession ? (
+                  <>
+                    <div className="detail-header-row">
+                      <div>
+                        <div className="detail-main-title">{activeSession.name}</div>
+                        <div className="detail-main-time">{new Date(activeSession.startTime).toLocaleString()}</div>
+                      </div>
+                      <button className="detail-restore-btn" onClick={async () => {
+                        const payload = { ...activeSession };
+                        const container = document.getElementById(`discovery-trail-${activeSession.id}`);
+                        if (container) {
+                          const checked = container.querySelectorAll('.url-checkbox:checked');
+                          payload.urls = Array.from(checked).map((el: any) => (el as HTMLInputElement).value);
+                        }
+                        if (payload.urls.length === 0 && payload.files.length === 0 && (!payload.windowTitles || payload.windowTitles.length === 0) && (!payload.dominantApps || payload.dominantApps.length === 0)) {
+                          alert(`Insufficient contextual anchors to resume "${payload.name}".`);
+                          return;
+                        }
+                        if ((window as any).electronAPI && (window as any).electronAPI.resumeWorkflow) {
+                          await (window as any).electronAPI.resumeWorkflow(payload);
+                        }
+                      }}>
+                        <span>⚡</span> Restore Environment
+                      </button>
+                    </div>
+                    <div className="explanation-box">
+                      <strong>Cognitive Summary:</strong> {activeSession.contextSummary || 'Synthesizing local cognitive trail patterns...'}
+                    </div>
+                    <div style={{ marginTop: '10px' }}>
+                      <div className="detail-section-title">Cognitive Discovery Trail</div>
+                      <div className="discovery-trail-container" id={`discovery-trail-${activeSession.id}`}>
+                        {trails.map((t, i) => (
+                          t.type === 'domain_group' ? (
+                            <div key={i} className="domain-group">
+                              <div className="domain-group-header">
+                                <span style={{ marginRight: '8px', fontSize: '0.8rem' }}>🌐</span>
+                                <span style={{ flex: 1, fontWeight: 600, fontSize: '0.85rem' }}>{t.domain} ({t.nodes.length} pages)</span>
+                              </div>
+                              <div className="domain-group-content">
+                                {t.nodes.map((n: any, j: number) => (
+                                  <div key={j} style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
+                                    <input type="checkbox" defaultChecked={true} className="url-checkbox" value={n.value} style={{ marginRight: '8px', cursor: 'pointer' }} />
+                                    <span style={{ fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: 'var(--text-primary)' }} title={n.value}>{n.title}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <div key={i} className="trail-node">
+                              <div className="trail-node-dot"></div>
+                              <span className="trail-node-icon">{t.icon}</span>
+                              <div className="trail-node-content">
+                                <div className="trail-node-title">{t.title}</div>
+                                <div className="trail-node-summary" title={t.summary}>{t.summary}</div>
+                              </div>
+                            </div>
+                          )
+                        ))}
+                      </div>
+                    </div>
+                    <div className="relationship-buckets">
+                      {activeSession.urls && activeSession.urls.length > 0 && (
+                        <div className="bucket-card">
+                          <div className="bucket-title">Research Anchors</div>
+                          {activeSession.urls.slice(0, 3).map((u: string, i: number) => {
+                            let domain = u;
+                            try { domain = new URL(u).hostname; } catch(e) {}
+                            return (
+                              <div key={i} className="bucket-item" title={u}>
+                                <span className="bucket-item-icon">🌐</span>
+                                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{domain}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {activeSession.files && activeSession.files.length > 0 && (
+                        <div className="bucket-card">
+                          <div className="bucket-title">Modified Items</div>
+                          {activeSession.files.slice(0, 3).map((f: string, i: number) => {
+                            const name = f.split(/[\\/]/).pop();
+                            return (
+                              <div key={i} className="bucket-item" title={f}>
+                                <span className="bucket-item-icon">📄</span>
+                                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="detail-empty-state">
+                    <div className="detail-empty-icon-svg">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="url(#brainGradient)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                        <defs>
+                          <linearGradient id="brainGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stopColor="#00E5FF"></stop>
+                            <stop offset="100%" stopColor="#B200FF"></stop>
+                          </linearGradient>
+                        </defs>
+                        <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path>
+                        <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path>
+                        <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"></path>
+                        <path d="M17.599 6.5a3 3 0 0 0 .399-1.375"></path>
+                        <path d="M6.002 6.5A3 3 0 0 1 5.602 5.125"></path>
+                        <path d="M11.588 15.5a3 3 0 0 1-.598-1.5"></path>
+                        <path d="M12.412 15.5a3 3 0 0 0 .598-1.5"></path>
+                      </svg>
+                    </div>
+                    <div className="detail-empty-title">Cognitive Context Drawer</div>
+                    <div className="detail-empty-subtitle">Select any ambient session card from the left column to view its dynamic Discovery Trail, associated research resources, and file relationships.</div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 }
-
-// ----------------------------------------------------
-// App Router
-// ----------------------------------------------------
-function App() {
-  return (
-    <HashRouter>
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/search" element={<SearchBar />} />
-      </Routes>
-    </HashRouter>
-  );
-}
-
-export default App;
