@@ -335,6 +335,12 @@ body {
   background-size: 40px 40px;
   mask-image: radial-gradient(ellipse at center, black 0%, transparent 80%);
   -webkit-mask-image: radial-gradient(ellipse at center, black 0%, transparent 80%);
+  animation: moveBlueprintGrid 3s linear infinite;
+}
+
+@keyframes moveBlueprintGrid {
+  from { background-position: 0 0; }
+  to { background-position: 40px 40px; }
 }
 
 .sidebar {
@@ -642,6 +648,7 @@ body {
   box-shadow: 0 10px 30px rgba(0,0,0,0.5);
   pointer-events: none;
   animation: slideUpFade 0.3s ease forwards;
+  z-index: 10;
 }
 
 .drawn-box {
@@ -839,3 +846,311 @@ body {
   align-items: center;
   gap: 12px;
 }
+
+/* ====================================================
+   PERSISTENT OVERLAY BAR
+   ==================================================== */
+.persistent-overlay-bar {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(10, 12, 14, 0.85);
+  backdrop-filter: blur(16px) saturate(1.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 9999;
+  pointer-events: none;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  min-width: 250px;
+  animation: slideDownFade 0.4s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+@keyframes slideDownFade {
+  0% { transform: translate(-50%, -16px); opacity: 0; }
+  100% { transform: translate(-50%, 0); opacity: 1; }
+}
+
+.pipelines-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pipeline-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.watching {
+  background-color: #f39c12;
+  box-shadow: 0 0 10px #f39c12;
+  animation: pulse-yellow 2s infinite;
+}
+
+.status-dot.running {
+  background-color: #2ecc71;
+  box-shadow: 0 0 10px #2ecc71;
+}
+
+.status-dot.finished {
+  background-color: #2ecc71;
+  box-shadow: 0 0 10px #2ecc71;
+}
+
+.status-dot.stopped {
+  background-color: #e74c3c;
+  box-shadow: 0 0 10px #e74c3c;
+}
+
+@keyframes pulse-yellow {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { opacity: 0.4; }
+}
+
+.pipeline-desc {
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  white-space: nowrap;
+}
+
+.pipeline-desc strong {
+  color: #fff;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.pipeline-desc span {
+  color: rgba(255, 255, 255, 0.3);
+  margin: 0 4px;
+}
+
+
+/* ====================================================
+   COGNITIVE DISCOVERY TRAILS UI
+   ==================================================== */
+.detail-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 1px solid var(--border-subtle);
+    padding-bottom: 18px;
+    margin-bottom: 20px;
+}
+
+.detail-main-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--text-main);
+    margin-bottom: 6px;
+    letter-spacing: 1px;
+}
+
+.detail-main-time {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--primary-light);
+}
+
+.detail-restore-btn {
+    background: rgba(255, 170, 0, 0.1);
+    color: var(--primary-light);
+    border: 1px solid var(--primary-light);
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    box-shadow: 0 0 15px rgba(255, 170, 0, 0.1);
+    transition: all 0.2s;
+}
+
+.detail-restore-btn:hover {
+    box-shadow: 0 0 25px var(--accent-glow);
+    background: var(--primary-light);
+    color: #000;
+}
+
+.explanation-box {
+    padding: 14px 18px;
+    background: rgba(255, 170, 0, 0.05);
+    border-left: 3px solid var(--primary-light);
+    border-radius: 0 12px 12px 0;
+    font-size: 0.88rem;
+    color: var(--text-main);
+    line-height: 1.6;
+    margin-bottom: 20px;
+}
+
+.detail-section-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--primary-light);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 16px;
+}
+
+.discovery-trail-container {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    position: relative;
+    padding-left: 20px;
+    margin-left: 8px;
+    margin-bottom: 30px;
+}
+
+.discovery-trail-container::before {
+    content: '';
+    position: absolute;
+    top: 6px;
+    bottom: 6px;
+    left: 5px;
+    width: 1px;
+    background: linear-gradient(180deg, var(--primary-light) 0%, rgba(255,170,0,0.04) 100%);
+    opacity: 0.4;
+}
+
+.trail-node {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    position: relative;
+}
+
+.trail-node-dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--bg-deep);
+    border: 2px solid var(--primary-light);
+    position: absolute;
+    left: -20px;
+    top: 4px;
+    box-shadow: 0 0 6px var(--accent-glow);
+    transition: all 0.3s;
+}
+
+.trail-node:hover .trail-node-dot {
+    transform: scale(1.3);
+    background: var(--primary-light);
+}
+
+.trail-node-icon {
+    font-size: 1.1rem;
+    opacity: 0.8;
+    margin-top: 1px;
+}
+
+.trail-node-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.trail-node-title {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-main);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.trail-node-summary {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 3px;
+}
+
+.domain-group {
+    background: rgba(255,170,0,0.02);
+    border: 1px solid rgba(255,170,0,0.1);
+    border-radius: 6px;
+    margin: 8px 0;
+    margin-left: 20px;
+}
+
+.domain-group-header {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    color: var(--text-main);
+}
+
+.domain-group-content {
+    padding: 8px 12px;
+    border-top: 1px solid rgba(255,170,0,0.1);
+}
+
+.relationship-buckets {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+
+.bucket-card {
+    background: rgba(255, 170, 0, 0.02);
+    border: 1px solid var(--border-subtle);
+    border-radius: 14px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bucket-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--primary-light);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 170, 0, 0.1);
+    padding-bottom: 6px;
+}
+
+.bucket-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78rem;
+    color: var(--text-main);
+    padding: 5px 8px;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+
+.bucket-item:hover {
+    background: rgba(255, 170, 0, 0.1);
+    color: var(--primary-light);
+}
+
+.bucket-item-icon {
+    font-size: 0.9rem;
+    opacity: 0.7;
+}
+

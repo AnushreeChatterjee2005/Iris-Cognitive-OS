@@ -1,12 +1,22 @@
 import { app, BrowserWindow, globalShortcut, ipcMain, screen } from 'electron';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { ActivityEngine } from './engine/ActivityEngine';
+import { ActivityStore } from './store/ActivityStore';
+import { EventBus } from './engine/EventBus';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let dashboardWindow: BrowserWindow | null = null;
 let searchWindow: BrowserWindow | null = null;
+let overlayWindow: BrowserWindow | null = null;
 let ignoreBlur = false;
+let hasPipelines = false;
+let engine: ActivityEngine | null = null;
+let store: ActivityStore | null = null;
+
+// Suppress AMD GPU DirectComposition errors in terminal
+app.disableHardwareAcceleration();
 
 function createDashboardWindow() {
   dashboardWindow = new BrowserWindow({
@@ -28,6 +38,36 @@ function createDashboardWindow() {
   dashboardWindow.on('closed', () => {
     dashboardWindow = null;
   });
+}
+
+function createOverlayWindow() {
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  
+  overlayWindow = new BrowserWindow({
+    width,
+    height,
+    x: 0,
+    y: 0,
+    show: false,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    movable: false,
+    resizable: false,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  });
+
+  overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+
+  if (!app.isPackaged) {
+    overlayWindow.loadURL('http://localhost:5173/overlay.html');
+  } else {
+    overlayWindow.loadFile(path.join(__dirname, '../dist/overlay.html'));
+  }
 }
 
 function createSearchWindow() {
@@ -67,16 +107,60 @@ function createSearchWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createDashboardWindow();
   createSearchWindow();
+  createOverlayWindow();
+
+  try {
+    store = new ActivityStore(app.getPath('userData'));
+    await store.init();
+    
+    engine = new ActivityEngine(store);
+    await engine.start();
+  } catch (e) {
+    console.error("[IRIS] Engine failed to start fully:", e);
+  }
+
+  EventBus.getInstance().onActivity((event) => {
+    if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+      dashboardWindow.webContents.send('activity-event', event);
+    }
+  });
+
+  EventBus.getInstance().on('ui-workflow-update', (workflow) => {
+    if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+      dashboardWindow.webContents.send('workflow-update', workflow);
+    }
+  });
+
+  EventBus.getInstance().on('resume-sequence', (data) => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      if (data.type === 'start') {
+        overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+        overlayWindow.showInactive(); 
+      }
+      overlayWindow.webContents.send('resume-sequence', data);
+      if (data.type === 'complete') {
+        setTimeout(() => {
+          if (overlayWindow && !overlayWindow.isDestroyed()) {
+            overlayWindow.hide();
+          }
+        }, 4000);
+      }
+    }
+  });
 
   // Register Ctrl+K global shortcut
-  const ret = globalShortcut.register('CommandOrControl+K', () => {
+  const ret = globalShortcut.register('CommandOrControl+Shift+U', () => {
     if (searchWindow) {
       if (searchWindow.isVisible()) {
         searchWindow.webContents.executeJavaScript(`window.dispatchEvent(new Event('electron-window-hidden'))`).catch(console.error);
-        setTimeout(() => { searchWindow?.hide(); }, 50);
+        if (!hasPipelines) {
+          setTimeout(() => { searchWindow?.hide(); }, 50);
+        } else {
+          // If pipelines exist, we keep the window visible but make it click-through (handled by React)
+        }
       } else {
         searchWindow.show();
         searchWindow.focus();
@@ -105,12 +189,18 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  if (engine) engine.stop();
+  if (store) store.close();
 });
 
 ipcMain.on('hide-window', () => {
-  if (searchWindow) {
+  if (searchWindow && !hasPipelines) {
     searchWindow.hide();
   }
+});
+
+ipcMain.on('set-has-pipelines', (event, val) => {
+  hasPipelines = val;
 });
 
 ipcMain.on('set-click-through', (event, ignore) => {
@@ -182,4 +272,17 @@ ipcMain.handle('load-semantic-index', async () => {
   const p = path.join(process.cwd(), '.iris_semantic_index.json');
   if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'));
   return [];
+});
+
+ipcMain.handle('search-memory', async (event, query) => {
+  if (engine) {
+    return await engine.searchMemory(query);
+  }
+  return [];
+});
+
+ipcMain.handle('resume-workflow', async (event, session) => {
+  if (engine) {
+    await engine.resumeWorkflow(session);
+  }
 });

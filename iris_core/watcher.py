@@ -9,6 +9,12 @@ import win32api
 import win32con
 from ctypes import windll
 import pyautogui
+import os
+
+def log_to_file(msg):
+    with open(r"c:\Users\Anushree Chatterjee\Hackathon_IRIS\watcher_debug.log", "a", encoding="utf-8") as f:
+        f.write(msg + "\n")
+    print(msg)
 
 # Force UTF-8 encoding for Windows terminal to prevent EasyOCR progress bar from crashing
 if sys.platform == "win32":
@@ -81,11 +87,11 @@ def click_and_type_background(hwnd, screen_x, screen_y, text_or_key):
             for char in text_or_key:
                 # Get the virtual key code for the character
                 vk_code = win32api.VkKeyScan(char) & 0xFF
-                # Send full keydown, char, keyup sequence to prevent Chromium caret desync
-                win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 1)
-                win32api.SendMessage(hwnd, win32con.WM_CHAR, ord(char), 1)
-                win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, 0xC0000001)
-                time.sleep(0.01)
+                # Use PostMessage to avoid deadlocking the thread if the target window is slow
+                win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 1)
+                win32api.PostMessage(hwnd, win32con.WM_CHAR, ord(char), 1)
+                win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk_code, 0xC0000001)
+                time.sleep(0.001)
         return True
     except Exception as e:
         print(f"Background click failed: {e}")
@@ -95,9 +101,9 @@ def watch_loop(task_id: str, source_bbox: dict, target_coords: dict, condition: 
     import torch
     torch.set_num_threads(1) # Prevent OpenMP deadlocks
     
-    print(f"[{task_id}] Loading EasyOCR Model in thread...")
+    log_to_file(f"[{task_id}] Loading EasyOCR Model in thread...")
     reader = easyocr.Reader(['en'], gpu=False)
-    print(f"[{task_id}] OCR Model loaded.")
+    log_to_file(f"[{task_id}] OCR Model loaded.")
     
     x, y, w, h = source_bbox['x'], source_bbox['y'], source_bbox['w'], source_bbox['h']
     tx, ty = target_coords['x'], target_coords['y']
@@ -109,10 +115,10 @@ def watch_loop(task_id: str, source_bbox: dict, target_coords: dict, condition: 
     source_title = win32gui.GetWindowText(source_hwnd)
     target_title = win32gui.GetWindowText(target_hwnd)
     
-    print(f"[{task_id}] Source Window Locked: {source_title} ({source_hwnd})")
-    print(f"[{task_id}] Target Window Locked: {target_title} ({target_hwnd})")
+    log_to_file(f"[{task_id}] Source Window Locked: {source_title} ({source_hwnd})")
+    log_to_file(f"[{task_id}] Target Window Locked: {target_title} ({target_hwnd})")
     
-    while active_watchers.get(task_id, False):
+    while active_watchers.get(task_id, {}).get("active", False):
         try:
             # 2. Capture the window directly from DWM (even in background)
             img_np = capture_window(source_hwnd)
@@ -133,325 +139,440 @@ def watch_loop(task_id: str, source_bbox: dict, target_coords: dict, condition: 
                 pass # We will do this below
                 
         except Exception as e:
-            print(f"[{task_id}] Watcher Error: {e}")
+            log_to_file(f"[{task_id}] Watcher Error: {e}")
             
         time.sleep(0.5)
 
-import google.generativeai as genai
+from groq import Groq
 import json
 import easyocr
 import torch
 
 torch.set_num_threads(1)
-print("Loading Global EasyOCR Model...")
+log_to_file("Loading Global EasyOCR Model...")
 global_reader = easyocr.Reader(['en'], gpu=False)
-print("Global OCR Model loaded.")
+log_to_file("Global OCR Model loaded.")
 
-GEMINI_API_KEY = "AQ.Ab8RN6LzEPJnTWzG21u7fh-s1kKGTzxE0JYNzg1Aicox2Ck5jQ"
-try:
-    genai.configure(api_key=GEMINI_API_KEY)
-except Exception:
-    pass
+GROQ_API_KEY = "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"
+groq_client = Groq(api_key=GROQ_API_KEY)
+
+class GroqResponse:
+    def __init__(self, text):
+        self.text = text
+
+def call_llm_with_retry(model_name, contents, task_id="system"):
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            messages = [{"role": "user", "content": []}]
+            for item in contents:
+                if isinstance(item, str):
+                    messages[0]["content"].append({"type": "text", "text": item})
+                else: # PIL Image
+                    import io
+                    import base64
+                    buffered = io.BytesIO()
+                    item.thumbnail((1024, 1024)) # resize for vision limits
+                    item.save(buffered, format="JPEG")
+                    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                    messages[0]["content"].append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_str}"}})
+            
+            chat_completion = groq_client.chat.completions.create(
+                messages=messages,
+                model=model_name,
+                temperature=0.0
+            )
+            return GroqResponse(chat_completion.choices[0].message.content)
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "rate limit" in err_str.lower() or "quota" in err_str.lower() or "400" in err_str:
+                if attempt < max_retries - 1:
+                    log_to_file(f"[{task_id}] Rate limit hit. Waiting 10s before retry {attempt+1}/{max_retries}...")
+                    import time
+                    time.sleep(10.0)
+                else:
+                    log_to_file(f"[{task_id}] Rate limit hit. Max retries reached.")
+                    raise e
+            else:
+                raise e
 
 def watch_loop_full(task_id: str, source_bbox: dict, target_bbox: dict, condition: str, action_text: str, mode: str):
-    print(f"[{task_id}] Mode selected: {mode}")
+    import time
+    time.sleep(1.0)
+    log_to_file(f"[{task_id}] Mode selected: {mode}")
     
-    x, y, w, h = source_bbox['x'], source_bbox['y'], source_bbox['w'], source_bbox['h']
-    tx, ty = target_bbox['x'] + target_bbox['w'] // 2, target_bbox['y'] + target_bbox['h'] // 2
+    import re
+    # --- DYNAMIC INTENT PARSING ---
+    # If action_text is empty, the frontend sent the raw unparsed command in 'condition'.
+    if not action_text and mode in ["when", "always"]:
+        log_to_file(f"[{task_id}] Parsing raw intent with Gemini...")
+        try:
+            split_prompt = f"""
+You are an intent parser for an automation AI. 
+The user provided a raw command: "{condition}"
+
+Split this command into two distinct parts:
+1. "condition": The trigger condition that the system should watch for. Make it concise. (e.g. "when an email arrives")
+2. "action": The action the system should perform. (e.g. "type thank you received")
+
+Output ONLY a JSON object:
+{{"condition": "...", "action": "..."}}
+"""
+            resp = call_llm_with_retry('llama-3.3-70b-versatile', [split_prompt], task_id)
+            json_match = re.search(r'\{.*\}', resp.text, re.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group(0))
+                condition = parsed.get("condition", condition)
+                action_text = parsed.get("action", "")
+                log_to_file(f"[{task_id}] Parsed Condition: {condition}")
+                log_to_file(f"[{task_id}] Parsed Action: {action_text}")
+                
+                # Update the shared state so the frontend UI can display the correct parsed action
+                if task_id in active_watchers:
+                    active_watchers[task_id]["condition"] = condition
+                    active_watchers[task_id]["action"] = action_text
+        except Exception as e:
+            log_to_file(f"[{task_id}] Intent parsing failed: {e}")
+    # -------------------------------
+    
+    x, y, w, h = int(source_bbox['x']), int(source_bbox['y']), int(source_bbox['w']), int(source_bbox['h'])
+    tx, ty = int(target_bbox['x'] + target_bbox['w'] / 2), int(target_bbox['y'] + target_bbox['h'] / 2)
     
     # Identify Source and Target HWNDs
-    source_hwnd = win32gui.WindowFromPoint((x + w//2, y + h//2))
-    target_hwnd = win32gui.WindowFromPoint((tx, ty))
+    def get_window_at_point(px, py):
+        import win32gui
+        found_hwnd = 0
+        def callback(hwnd, extra):
+            nonlocal found_hwnd
+            if found_hwnd != 0: return True
+            if win32gui.IsWindowVisible(hwnd):
+                title = win32gui.GetWindowText(hwnd)
+                # Ignore the Electron overlay
+                if "hackathon-iris" in title.lower() or title == "":
+                    return True
+                rect = win32gui.GetWindowRect(hwnd)
+                if rect[0] <= px <= rect[2] and rect[1] <= py <= rect[3]:
+                    found_hwnd = hwnd
+                    return True # Keep enumerating but found_hwnd is set, next calls will skip
+            return True
+        try:
+            win32gui.EnumWindows(callback, None)
+        except Exception:
+            pass
+        return found_hwnd
+
+    source_hwnd = get_window_at_point(x + w//2, y + h//2)
+    target_hwnd = get_window_at_point(tx, ty)
     
-    print(f"[{task_id}] Locked Source: {win32gui.GetWindowText(source_hwnd)}")
-    print(f"[{task_id}] Locked Target: {win32gui.GetWindowText(target_hwnd)}")
+    log_to_file(f"[{task_id}] Locked Source: {win32gui.GetWindowText(source_hwnd) if source_hwnd else 'None'}")
+    log_to_file(f"[{task_id}] Locked Target: {win32gui.GetWindowText(target_hwnd) if target_hwnd else 'None'}")
     
     # Calculate relative offset of the box within the window
-    orig_left, orig_top, _, _ = win32gui.GetWindowRect(source_hwnd)
-    rel_x = x - orig_left
-    rel_y = y - orig_top
+    if source_hwnd:
+        orig_left, orig_top, _, _ = win32gui.GetWindowRect(source_hwnd)
+        rel_x = x - orig_left
+        rel_y = y - orig_top
+    else:
+        orig_left, orig_top, rel_x, rel_y = 0, 0, x, y
+    
+    # --- HYBRID ROUTER LOGIC ---
+    source_title = win32gui.GetWindowText(source_hwnd)
+    target_title = win32gui.GetWindowText(target_hwnd)
+    
+    source_is_web = "Google Chrome" in source_title
+    target_is_web = "Google Chrome" in target_title
+    
+    playwright_context = None
+    playwright_browser = None
+    if source_is_web or target_is_web:
+        try:
+            from playwright.sync_api import sync_playwright
+            # We keep the playwright instance running for the duration of this loop
+            playwright_instance = sync_playwright().start()
+            playwright_browser = playwright_instance.chromium.connect_over_cdp("http://localhost:9222")
+            playwright_context = playwright_browser.contexts[0]
+            log_to_file(f"[{task_id}] Hybrid Router: Successfully connected to Chrome via CDP!")
+        except Exception as e:
+            log_to_file(f"[{task_id}] Hybrid Router Warning: Could not connect to Chrome on 9222. Falling back to native CV/PyAutoGUI for all tasks. ({e})")
+            source_is_web = False
+            target_is_web = False
+    # ---------------------------
     
     last_extracted_text = None
     
-    # ---------------------------------------------------------
-    # LLM COMPILER STEP
-    # ---------------------------------------------------------
-    compiled_condition = None
-    compiled_action = None
-    
-    if mode in ["when", "always"]:
-        print(f"[{task_id}] Compiling intent via LLM...")
-        compiler_prompt = f"""
-You are an expert compiler. Translate the user's natural language condition and action into raw executable logic.
-Condition: "{condition}"
-Action: "{action_text}"
+    def execute_dynamic_action(s_crop_img, extracted_text=""):
+        nonlocal action_text
+        if not action_text: action_text = condition
+        
+        # Layer 1: Web Execution (Playwright)
+        if target_is_web and playwright_context:
+            log_to_file(f"[{task_id}] Target is Web. Injecting via Playwright DOM...")
+            try:
+                page = playwright_context.pages[0]
+                
+                # We ask Gemini to generate Playwright commands based on the intent!
+                prompt = f'''
+You are an expert Web AI agent.
+User Intent: "{action_text}"
 
-You must output a JSON object with exactly two keys: "condition_eval" and "action_json".
-"condition_eval": A valid Python expression that returns True if the condition is met. You have access to variables: `curr` (current OCR string) and `prev` (previous OCR string, can be None). Use `prev` for state change conditions.
-"action_json": A JSON list of objects representing the action sequence. Supported types: {{"type": "text", "value": "hello"}}, {{"type": "key", "value": "tab"}}, {{"type": "key", "value": "enter"}}.
+The user wants to execute this intent on the active web page.
+Return ONLY a raw JSON array of objects representing Playwright actions.
+Format:
+[
+  {{"action": "fill", "placeholder": "To", "value": "email@gmail.com"}},
+  {{"action": "fill", "placeholder": "Subject", "value": "Hello"}},
+  {{"action": "fill_body", "value": "Body text"}},
+  {{"action": "click", "text": "Send"}}
+]
 
-Output ONLY the raw JSON object, no markdown.
-Example 1:
-Condition: "when a new text arrives"
-Action: "type yay and send it"
-Output: {{"condition_eval": "prev is not None and curr != prev", "action_json": [{{"type": "text", "value": "yay"}}, {{"type": "key", "value": "enter"}}]}}
+If you just need to click a button by its text:
+[ {{"action": "click", "text": "Send"}} ]
 
-Example 2:
-Condition: "when it says error"
-Action: "type fix"
-Output: {{"condition_eval": "'error' in curr.lower()", "action_json": [{{"type": "text", "value": "fix"}}]}}
-"""
+If you need to fill a specific field by placeholder:
+[ {{"action": "fill", "placeholder": "Search", "value": "query"}} ]
+'''
+                resp = call_llm_with_retry('llama-3.3-70b-versatile', [prompt], task_id)
+                import json, re
+                json_match = re.search(r'\[.*\]', resp.text, re.DOTALL)
+                if json_match:
+                    actions = json.loads(json_match.group(0))
+                    for act in actions:
+                        if act["action"] == "click":
+                            page.get_by_text(act["text"]).first.click(timeout=3000)
+                        elif act["action"] == "fill":
+                            page.get_by_placeholder(act["placeholder"]).first.fill(act["value"])
+                        elif act["action"] == "fill_body":
+                            # For Gmail body, it's often an aria-label="Message Body"
+                            page.get_by_label("Message Body", exact=False).first.fill(act["value"])
+                    log_to_file(f"[{task_id}] Playwright Web Execution Successful!")
+                    return True
+            except Exception as e:
+                log_to_file(f"[{task_id}] Playwright Execution Failed: {e}. Falling back to Vision.")
+
+        # Layer 2 & 3: Vision/Native Fallback (PyAutoGUI)
+        import cv2
+        import pyautogui
+        t_crop = None
         try:
-            import requests, json
-            API_BASE_URL = "https://api.cloudflare.com/client/v4/accounts/895f8c7b633eccf9438f9c233b93049b/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
-            headers = {"Authorization": "Bearer cfut_2KqZpUwpIsNcHK4jkgrc7mH6PuKSaubdYhD2Rmad50d12dbc"}
-            inputs = {"max_tokens": 500, "messages": [{"role": "system", "content": "You are a raw compiler. Output ONLY valid JSON."}, {"role": "user", "content": compiler_prompt}]}
-            response = requests.post(API_BASE_URL, headers=headers, json=inputs).json()
-            resp_val = response.get("result", {}).get("response", "").strip()
-            if resp_val.startswith("```json"): resp_val = resp_val[7:]
-            if resp_val.startswith("```"): resp_val = resp_val[3:]
-            if resp_val.endswith("```"): resp_val = resp_val[:-3]
-            resp_val = resp_val.strip()
-            
-            compiled_data = json.loads(resp_val)
-            compiled_condition = compiled_data.get("condition_eval")
-            compiled_action = compiled_data.get("action_json")
-            print(f"[{task_id}] LLM Compiled Condition: {compiled_condition}")
-            print(f"[{task_id}] LLM Compiled Action: {compiled_action}")
+            t_img_np = capture_window(target_hwnd)
+            if t_img_np is not None:
+                t_orig_left, t_orig_top, _, _ = win32gui.GetWindowRect(target_hwnd)
+                t_rel_x, t_rel_y = target_bbox['x'] - t_orig_left, target_bbox['y'] - t_orig_top
+                t_win_h, t_win_w, _ = t_img_np.shape
+                t_crop = t_img_np[max(0, t_rel_y):min(t_win_h, t_rel_y + target_bbox['h']), max(0, t_rel_x):min(t_win_w, t_rel_x + target_bbox['w'])]
         except Exception as e:
-            print(f"[{task_id}] Compiler Failed: {e}. Falling back to basic logic.")
-            
-    while active_watchers.get(task_id, False):
+            pass
+
+        prompt = f'''
+You are an expert AI agent executing a user's intent on a GUI.
+User Intent: "{action_text}"
+
+Determine what physical action to take on the Target Box to fulfill the user's intent.
+You MUST output ONLY a valid JSON object.
+If the intent requires typing data into fields, output a flat list:
+{{"action": "type", "values": ["string 1", "string 2"]}}
+If the intent is just to click a button, output:
+{{"action": "click"}}
+'''
+        action_type = "type"
+        values_to_type = []
         try:
-            # Capture background window for ALL modes
-            img_np = capture_window(source_hwnd)
-            if img_np is not None:
-                win_h, win_w, _ = img_np.shape
+            contents = [prompt]
+            if s_crop_img is not None and s_crop_img.size > 0:
+                from PIL import Image
+                s_pil = Image.fromarray(cv2.cvtColor(s_crop_img, cv2.COLOR_BGR2RGB))
+                contents.extend(["Source Data Image:", s_pil])
+            elif extracted_text:
+                contents.extend([f"Source Data Text: {extracted_text}"])
                 
-                # Ensure crop is within bounds
-                crop_y1 = max(0, rel_y)
-                crop_y2 = min(win_h, rel_y + h)
-                crop_x1 = max(0, rel_x)
-                crop_x2 = min(win_w, rel_x + w)
-                
-                cropped_img = img_np[crop_y1:crop_y2, crop_x1:crop_x2]
-                
-                if cropped_img.size > 0:
-                    results = global_reader.readtext(cropped_img, detail=0, workers=0)
+            if t_crop is not None and t_crop.size > 0:
+                from PIL import Image
+                t_pil = Image.fromarray(cv2.cvtColor(t_crop, cv2.COLOR_BGR2RGB))
+                contents.extend(["Target Form Image:", t_pil])
+
+            response = call_llm_with_retry('llama-3.2-90b-vision-preview', contents, task_id)
+            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group(0))
+                action_type = parsed.get("action", "type")
+                values_to_type = parsed.get("values", [])
+                if not isinstance(values_to_type, list): values_to_type = [values_to_type]
+                log_to_file(f"[{task_id}] Dynamic Action Decided: {action_type} | Values: {values_to_type}")
+        except Exception as e:
+            log_to_file(f"[{task_id}] Gemini Vision Action parsing failed: {e}")
+            active_watchers[task_id]["status"] = f"Error: API Limit"
+            return False
+
+        final_tx, final_ty = tx, ty
+        try:
+            if t_crop is not None and t_crop.size > 0:
+                gray = cv2.cvtColor(t_crop, cv2.COLOR_BGR2GRAY)
+                edges = cv2.Canny(gray, 10, 30)
+                contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                input_fields = [cv2.boundingRect(c) for c in contours if cv2.boundingRect(c)[2]*cv2.boundingRect(c)[3] > 1000 and 25 < cv2.boundingRect(c)[3] < 80 and cv2.boundingRect(c)[2] > 100]
+                if input_fields:
+                    input_fields.sort(key=lambda f: (f[1], f[0]))
+                    rx, ry, rw, rh = input_fields[0]
+                    final_tx, final_ty = target_bbox['x'] + rx + rw // 2, target_bbox['y'] + ry + rh // 2
+                    log_to_file(f"[{task_id}] Auto-Aim engaged!")
+        except Exception:
+            pass
+
+        # Native Desktop Execution (Layer 2: UIAutomation)
+        uia_success = False
+        try:
+            from pywinauto import Desktop
+            ctrl = Desktop(backend="uia").from_point(tx, ty)
+            if action_type == "click":
+                if hasattr(ctrl, 'invoke'):
+                    ctrl.invoke()
+                else:
+                    ctrl.click_input()
+                log_to_file(f"[{task_id}] UIA Native Execution Successful!")
+                uia_success = True
+            elif action_type == "type":
+                # UIA can set text without moving the mouse!
+                if hasattr(ctrl, 'set_edit_text'):
+                    ctrl.set_edit_text(str(values_to_type[0]))
+                else:
+                    ctrl.type_keys(str(values_to_type[0]), with_spaces=True)
+                log_to_file(f"[{task_id}] UIA Native Execution Successful!")
+                uia_success = True
+        except Exception as e:
+            log_to_file(f"[{task_id}] UIA Native Execution Failed: {e}. Falling back to Vision.")
+
+        if not uia_success:
+            # Layer 3: Vision Fallback (PyAutoGUI)
+            pyautogui.click(x=final_tx, y=final_ty)
+            time.sleep(0.5)
+
+            if action_type == "type":
+                import pyperclip
+                for r_idx, val in enumerate(values_to_type):
+                    pyperclip.copy(str(val))
+                    time.sleep(0.05)
+                    pyautogui.hotkey('ctrl', 'v')
+                    time.sleep(0.1)
+                    if r_idx < len(values_to_type) - 1:
+                        pyautogui.press('tab')
+                        time.sleep(0.1)
+        return True
+
+    while active_watchers.get(task_id, {}).get("active", False):
+        try:
+            cropped_img = None
+            extracted_text = ""
+            extracted_text_lower = ""
+            
+            # Layer 1: Web Motion Detector (Playwright)
+            if source_is_web and playwright_context:
+                try:
+                    page = playwright_context.pages[0]
+                    extracted_text = page.inner_text("body")
+                    extracted_text_lower = extracted_text.lower()
+                except Exception as e:
+                    pass
+
+            # Layer 2: Native Motion Detector (UIAutomation)
+            if not extracted_text_lower and not source_is_web:
+                try:
+                    from pywinauto import Desktop
+                    ctrl = Desktop(backend="uia").from_point(x + w//2, y + h//2)
+                    extracted_text = ctrl.window_text()
+                    if extracted_text:
+                        extracted_text_lower = extracted_text.lower()
+                except Exception:
+                    pass
+
+            # Layer 3: Vision Fallback (OCR)
+            if not extracted_text_lower:
+                img_np = capture_window(source_hwnd)
+                if img_np is not None:
+                    win_h, win_w, _ = img_np.shape
+                    crop_y1, crop_y2 = max(0, rel_y), min(win_h, rel_y + h)
+                    crop_x1, crop_x2 = max(0, rel_x), min(win_w, rel_x + w)
+                    cropped_img = img_np[crop_y1:crop_y2, crop_x1:crop_x2]
                     
-                    if mode == "now":
-                        # Semantic mapping with Gemini!
-                        extracted_text = " ".join(results)
-                        print(f"[{task_id}] Mode=Now. OCR Extracted: '{extracted_text}'")
-                        print(f"[{task_id}] Asking Gemini to map data based on intent: '{action_text}'")
-                        
-                        import cv2
-                        import numpy as np
-                        target_text = ""
-                        try:
-                            # Use relative capture on target_hwnd instead of pyautogui
-                            t_img_np = capture_window(target_hwnd)
-                            if t_img_np is not None:
-                                t_orig_left, t_orig_top, _, _ = win32gui.GetWindowRect(target_hwnd)
-                                t_rel_x = target_bbox['x'] - t_orig_left
-                                t_rel_y = target_bbox['y'] - t_orig_top
-                                
-                                t_win_h, t_win_w, _ = t_img_np.shape
-                                t_crop_y1 = max(0, t_rel_y)
-                                t_crop_y2 = min(t_win_h, t_rel_y + target_bbox['h'])
-                                t_crop_x1 = max(0, t_rel_x)
-                                t_crop_x2 = min(t_win_w, t_rel_x + target_bbox['w'])
-                                
-                                t_crop = t_img_np[t_crop_y1:t_crop_y2, t_crop_x1:t_crop_x2]
-                                if t_crop.size > 0:
-                                    target_results = global_reader.readtext(t_crop, detail=0, workers=0)
-                                    target_text = " ".join(target_results)
-                                    print(f"[{task_id}] Target Form Labels Extracted: '{target_text}'")
-                        except Exception as e:
-                            print(f"[{task_id}] Failed to read target form: {e}")
-                        
-                        prompt = f"""
-You are an expert data extraction agent.
-The user's intent is: "{action_text}"
+                    if cropped_img.size > 0:
+                        if mode == "now":
+                            log_to_file(f"[{task_id}] Mode=Now. Triggering immediately.")
+                            execute_dynamic_action(cropped_img)
+                            active_watchers[task_id]["active"] = False
+                            active_watchers[task_id]["status"] = "finished"
+                            break
 
-Here is the unstructured text from the SOURCE:
-{extracted_text}
-
-Here are the input field labels found in the TARGET form (in order):
-{target_text}
-
-Map the source data to these target fields. 
-Return EXACTLY AND ONLY a valid JSON array of strings containing the values in the exact order of the target fields.
-If a field has no matching data in the source, use an empty string "" for that value.
-Do not wrap it in markdown block quotes. Just the raw JSON array.
-Example output: ["Alexander Wright", "awright.dev@example.com", "Stanford University"]
-"""
-                        try:
-                            import requests
-                            API_BASE_URL = "https://api.cloudflare.com/client/v4/accounts/895f8c7b633eccf9438f9c233b93049b/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
-                            headers = {"Authorization": "Bearer cfut_2KqZpUwpIsNcHK4jkgrc7mH6PuKSaubdYhD2Rmad50d12dbc"}
-                            inputs = {
-                              "max_tokens": 1000,
-                              "messages": [
-                                {"role": "system", "content": "You are a rigid data mapping API. You ONLY output valid JSON arrays like [\"val1\", \"val2\"]. Never output plain text."},
-                                {"role": "user", "content": prompt + "\n\nRespond with the JSON array now:"}
-                              ]
-                            }
-                            response = requests.post(API_BASE_URL, headers=headers, json=inputs)
-                            result = response.json()
-                            import json
-                            resp_val = result.get("result", {}).get("response", "")
-                            if isinstance(resp_val, list):
-                                raw_output = json.dumps(resp_val)
-                            else:
-                                raw_output = str(resp_val).strip()
-                            print(f"[{task_id}] Cloudflare Llama3 Response: {raw_output}")
-                            
-                            raw_output = raw_output.strip()
-                            if raw_output.startswith("```json"):
-                                raw_output = raw_output[7:]
-                            if raw_output.startswith("```"):
-                                raw_output = raw_output[3:]
-                            if raw_output.endswith("```"):
-                                raw_output = raw_output[:-3]
-                            raw_output = raw_output.strip()
-                            
-                            # COMPUTER VISION AUTO-AIM (GUI Element Detection)
+                        results = global_reader.readtext(cropped_img, detail=0, workers=0)
+                        extracted_text = " ".join(results).strip()
+                        extracted_text_lower = extracted_text.lower()
+            
+            # Hybrid Condition Evaluation
+            if mode == "now":
+                pass # Handled above for OCR, for Web/UIA we just trigger
+            else:
+                is_condition_met = False
+                text_changed = (last_extracted_text is None) or (extracted_text != last_extracted_text)
+                if text_changed:
+                    log_to_file(f"[{task_id}] State change or initial frame detected. Verifying condition with Gemini...")
+                    try:
+                        if cropped_img is not None and cropped_img.size > 0:
                             import cv2
-                            tx, ty = target_bbox['x'] + target_bbox['w'] // 2, target_bbox['y'] + target_bbox['h'] // 2
+                            from PIL import Image
+                            img_rgb = cv2.cvtColor(cropped_img, cv2.COLOR_BGR2RGB)
+                            pil_img = Image.fromarray(img_rgb)
+                            eval_prompt = f"Does this image meet the following condition: '{condition}'? Answer EXACTLY 'YES' or 'NO'."
+                            resp = call_llm_with_retry('llama-3.2-90b-vision-preview', [eval_prompt, pil_img], task_id)
+                        else:
+                            # Send text to Groq instead of Image (Zero Cost & Ultra Fast!)
+                            eval_prompt = f"Does the following text state meet this condition: '{condition}'? Answer EXACTLY 'YES' or 'NO'.\n\nText State:\n{extracted_text_lower[:5000]}"
+                            resp = call_llm_with_retry('llama-3.3-70b-versatile', [eval_prompt], task_id)
                             
-                            try:
-                                t_img_np = capture_window(target_hwnd)
-                                if t_img_np is not None:
-                                    t_orig_left, t_orig_top, _, _ = win32gui.GetWindowRect(target_hwnd)
-                                    t_rel_x = target_bbox['x'] - t_orig_left
-                                    t_rel_y = target_bbox['y'] - t_orig_top
-                                    
-                                    t_win_h, t_win_w, _ = t_img_np.shape
-                                    t_crop_y1 = max(0, t_rel_y)
-                                    t_crop_y2 = min(t_win_h, t_rel_y + target_bbox['h'])
-                                    t_crop_x1 = max(0, t_rel_x)
-                                    t_crop_x2 = min(t_win_w, t_rel_x + target_bbox['w'])
-                                    
-                                    t_crop = t_img_np[t_crop_y1:t_crop_y2, t_crop_x1:t_crop_x2]
-                                    
-                                    if t_crop.size > 0:
-                                        gray = cv2.cvtColor(t_crop, cv2.COLOR_BGR2GRAY)
-                                        # Use very low thresholds for dark mode UI
-                                        edges = cv2.Canny(gray, 10, 30)
-                                        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                                        
-                                        input_fields = []
-                                        for cnt in contours:
-                                            rx, ry, rw, rh = cv2.boundingRect(cnt)
-                                            area = rw * rh
-                                            # Looking for input fields: typical height 25-80px, wide enough
-                                            if area > 1000 and 25 < rh < 80 and rw > 100:
-                                                input_fields.append((rx, ry, rw, rh))
-                                                
-                                        if input_fields:
-                                            input_fields.sort(key=lambda f: (f[1], f[0]))
-                                            rx, ry, rw, rh = input_fields[0]
-                                            # tx, ty are relative to screen. t_crop was relative to target_bbox.
-                                            tx = target_bbox['x'] + rx + rw // 2
-                                            ty = target_bbox['y'] + ry + rh // 2
-                                            print(f"[{task_id}] CV Auto-Aim engaged! Shifted click to exact FIRST input box.")
-                                        else:
-                                            print(f"[{task_id}] CV Auto-Aim failed to find contour. Falling back to center of target box.")
-                                            # Fallback to center of the target box
-                                            tx = target_bbox['x'] + target_bbox['w'] // 2
-                                            ty = target_bbox['y'] + target_bbox['h'] // 2
-                            except Exception as e:
-                                print(f"[{task_id}] CV Auto-Aim failed: {e}")
-                            
-                            # Headless Background Click and Type
-                            click_and_type_background(target_hwnd, tx, ty, "")
-                            time.sleep(0.8)
-                            
-                            if raw_output.startswith('[') and raw_output.endswith(']'):
-                                values_to_type = json.loads(raw_output)
-                                print(f"[{task_id}] Final values to type: {values_to_type}")
-                                for i, val in enumerate(values_to_type):
-                                    # Write directly using headless keyboard message queue injection
-                                    click_and_type_background(target_hwnd, None, None, str(val))
-                                    if i < len(values_to_type) - 1:
-                                        time.sleep(0.1)
-                                        click_and_type_background(target_hwnd, None, None, '\t')
-                                        time.sleep(0.15)
-                            else:
-                                print(f"[{task_id}] Fallback raw paste")
-                                click_and_type_background(target_hwnd, None, None, raw_output)
-                                    
-                        except Exception as e:
-                            print(f"[{task_id}] Extraction Error: {e}")
-                            
-                        active_watchers[task_id] = False
+                        answer = resp.text.strip().upper()
+                        log_to_file(f"[{task_id}] Gemini Evaluation: {answer}")
+                        if "YES" in answer:
+                            is_condition_met = True
+                        else:
+                            import time
+                            time.sleep(2.0)
+                        last_extracted_text = extracted_text_lower
+                    except Exception as e:
+                        log_to_file(f"[{task_id}] Gemini Evaluation Error: {e}")
+                        import time
+                        time.sleep(2.0)
+                
+                if is_condition_met:
+                    log_to_file(f"[{task_id}] CONDITION MET! Firing Background Strike!")
+                    success = execute_dynamic_action(cropped_img, extracted_text)
+                    
+                    if success is False:
+                        active_watchers[task_id]["active"] = False
                         break
                     
-                    # For 'when' and 'always' modes
-                    extracted_text_lower = " ".join(results).lower().strip()
-                    print(f"[{task_id}] OCR Saw: '{extracted_text_lower}'")
-                    
-                    is_condition_met = False
-                    
-                    if compiled_condition:
-                        try:
-                            # Evaluate the LLM-compiled python lambda!
-                            is_condition_met = eval(compiled_condition, {"__builtins__": {}}, {"curr": extracted_text_lower, "prev": last_extracted_text})
-                        except Exception as e:
-                            print(f"[{task_id}] Compiled condition eval failed: {e}")
+                    if mode == "always":
+                        log_to_file(f"[{task_id}] Mode=Always. Entering 5-second cooldown before looping...")
+                        import time
+                        time.sleep(5)
                     else:
-                        # Fallback basic logic
-                        cond_clean = condition.lower().strip()
-                        state_change_phrases = ["it changes", "when it changes", "new text arrives", "when new text arrives", "a new text arrives", "when a new text arrives"]
-                        if cond_clean in state_change_phrases:
-                            if last_extracted_text is not None and extracted_text_lower != last_extracted_text and extracted_text_lower != "":
-                                is_condition_met = True
-                        elif cond_clean in extracted_text_lower:
-                            is_condition_met = True
-                            
-                    last_extracted_text = extracted_text_lower
-                    
-                    if is_condition_met:
-                        print(f"[{task_id}] CONDITION MET! Firing Background Strike!")
-                        print(f"[{task_id}] Firing invisible background strike at {tx}, {ty}")
-                        
-                        if compiled_action:
-                            # Execute the LLM-compiled action sequence
-                            for act in compiled_action:
-                                if act.get("type") == "text":
-                                    click_and_type_background(target_hwnd, tx, ty, act.get("value", ""))
-                                elif act.get("type") == "key":
-                                    k = act.get("value", "").lower()
-                                    if k == "enter":
-                                        click_and_type_background(target_hwnd, tx, ty, "\n")
-                                    elif k == "tab":
-                                        click_and_type_background(target_hwnd, tx, ty, "\t")
-                                time.sleep(0.1)
-                        else:
-                            # Fallback basic logic
-                            final_action = action_text
-                            if final_action.lower().endswith(" and send it"):
-                                final_action = final_action[:-12].strip() + "\n"
-                            click_and_type_background(target_hwnd, tx, ty, final_action)
-                        
-                        if mode == "always":
-                            print(f"[{task_id}] Mode=Always. Entering 5-second cooldown before looping...")
-                            time.sleep(5)
-                            # Do not break, keep looping
-                        else:
-                            active_watchers[task_id] = False
-                            break
+                        active_watchers[task_id]["active"] = False
+                        active_watchers[task_id]["status"] = "finished"
+                        break
         except Exception as e:
-            print(f"[{task_id}] Error: {e}")
+            log_to_file(f"[{task_id}] Error: {e}")
+        import time
         time.sleep(0.5)
 
 def start_watcher(task_id, source_bbox, target_bbox, condition, action_text, mode):
-    active_watchers[task_id] = True
+    active_watchers[task_id] = {
+        "active": True,
+        "mode": mode,
+        "condition": condition,
+        "action": action_text,
+        "status": "watching"
+    }
     t = threading.Thread(target=watch_loop_full, args=(task_id, source_bbox, target_bbox, condition, action_text, mode), daemon=True)
     t.start()
     return t
 
 def stop_watcher(task_id: str):
     if task_id in active_watchers:
-        active_watchers[task_id] = False
+        active_watchers[task_id]["active"] = False
+        active_watchers[task_id]["status"] = "stopped"

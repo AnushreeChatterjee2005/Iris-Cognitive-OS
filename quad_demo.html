@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IRIS Demo: 4-Way Orchestration</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0f172a;
+            --border: #334155;
+            --text: #f8fafc;
+            --muted: #94a3b8;
+            --notion-bg: #191919;
+            --slack-bg: #1a1d21;
+            --email-bg: #ffffff;
+            --cal-bg: #ffffff;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: #000;
+            color: var(--text);
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            gap: 4px;
+            padding: 4px;
+        }
+
+        .pane {
+            background: var(--bg);
+            border-radius: 8px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .pane-header {
+            padding: 12px 16px;
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid rgba(0,0,0,0.1);
+            z-index: 10;
+        }
+
+        /* Email */
+        .email-pane { background: var(--email-bg); color: #333; }
+        .email-pane .pane-header { background: #f1f3f4; border-bottom-color: #e0e0e0; }
+        .email-list { flex: 1; overflow-y: auto; }
+        .email-item { padding: 16px; border-bottom: 1px solid #e0e0e0; cursor: pointer; transition: background 0.2s; }
+        .email-item:hover { background: #f8f9fa; }
+        .email-sender { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+        .email-subj { font-weight: 500; font-size: 13px; margin-bottom: 4px; color: #1a73e8; }
+        .email-snippet { font-size: 13px; color: #5f6368; line-height: 1.4; }
+
+        /* Notion */
+        .notion-pane { background: var(--notion-bg); color: #e9e9e9; }
+        .notion-pane .pane-header { background: #2f2f2f; border-bottom-color: #444; }
+        .notion-content { padding: 24px; flex: 1; display: flex; flex-direction: column; gap: 16px; }
+        .notion-title { font-size: 24px; font-weight: 700; margin-bottom: 10px; }
+        .task-list { display: flex; flex-direction: column; gap: 10px; }
+        .task { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+        .checkbox { width: 16px; height: 16px; border: 1px solid #666; border-radius: 3px; }
+        .tag { font-size: 11px; padding: 2px 6px; border-radius: 4px; font-weight: 500; }
+        .tag.urgent { background: rgba(235, 87, 87, 0.2); color: #eb5757; }
+        .tag.design { background: rgba(45, 156, 219, 0.2); color: #2d9cdb; }
+
+        /* Calendar */
+        .cal-pane { background: var(--cal-bg); color: #333; }
+        .cal-pane .pane-header { background: #f8f9fa; border-bottom-color: #e0e0e0; }
+        .cal-grid { display: grid; grid-template-columns: 60px 1fr; flex: 1; overflow-y: auto; }
+        .time-col { border-right: 1px solid #e0e0e0; text-align: right; padding: 16px 8px; color: #70757a; font-size: 12px; display: flex; flex-direction: column; gap: 40px; }
+        .event-col { padding: 16px; position: relative; }
+        .event { position: absolute; left: 16px; right: 16px; background: #e8f0fe; border-left: 4px solid #1a73e8; padding: 8px 12px; border-radius: 4px; font-size: 13px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .event-title { font-weight: 600; color: #1a73e8; margin-bottom: 4px; }
+
+        /* Slack */
+        .slack-pane { background: var(--slack-bg); color: #d1d2d3; }
+        .slack-pane .pane-header { background: #222529; border-bottom-color: #383838; }
+        .slack-messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
+        .msg { display: flex; gap: 12px; }
+        .avatar { width: 36px; height: 36px; border-radius: 4px; background: #4a154b; flex-shrink: 0; }
+        .msg-content h4 { margin: 0 0 4px 0; color: #fff; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+        .msg-content h4 span { font-size: 11px; color: #ababad; font-weight: 400; }
+        .msg-content p { margin: 0; font-size: 14px; line-height: 1.5; }
+        .slack-input-area { padding: 16px 20px; background: #222529; }
+        .slack-input { width: 100%; background: #1a1d21; border: 1px solid #383838; border-radius: 6px; padding: 12px; color: #fff; font-size: 14px; outline: none; }
+
+        .simulate-btn {
+            position: absolute;
+            top: 10px;
+            right: 16px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            z-index: 20;
+        }
+        .simulate-btn:hover { background: #2563eb; }
+
+    </style>
+</head>
+<body>
+
+    <!-- 1. EMAIL -->
+    <div class="pane email-pane">
+        <div class="pane-header">📧 Inbox (2)</div>
+        <button class="simulate-btn" onclick="receiveEmail()">Receive Email</button>
+        <div class="email-list" id="email-list">
+            <div class="email-item">
+                <div class="email-sender">Stripe Support</div>
+                <div class="email-subj">Your weekly payout summary</div>
+                <div class="email-snippet">Your payout of $1,240.50 is on its way to your bank account...</div>
+            </div>
+            <div class="email-item">
+                <div class="email-sender">Alex Chen</div>
+                <div class="email-subj">Design assets for Q3</div>
+                <div class="email-snippet">I've attached the Figma files for the upcoming campaign. Let me know...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. NOTION -->
+    <div class="pane notion-pane">
+        <div class="pane-header">📝 Notion - Q3 Planning</div>
+        <button class="simulate-btn" style="background:#eb5757;" onclick="addUrgentTask()">Add Urgent Task</button>
+        <div class="notion-content">
+            <div class="notion-title">Project Sprint Tasks</div>
+            <div class="task-list" id="task-list">
+                <div class="task">
+                    <div class="checkbox"></div>
+                    <span>Draft marketing copy for landing page</span>
+                    <span class="tag design">Design</span>
+                </div>
+                <div class="task">
+                    <div class="checkbox"></div>
+                    <span>Review analytics from last week's email blast</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. CALENDAR -->
+    <div class="pane cal-pane">
+        <div class="pane-header">📅 Calendar</div>
+        <button class="simulate-btn" style="background:#1a73e8;" onclick="triggerMeeting()">Meeting in 10m</button>
+        <div class="cal-grid">
+            <div class="time-col">
+                <span>9 AM</span>
+                <span>10 AM</span>
+                <span>11 AM</span>
+                <span>12 PM</span>
+                <span>1 PM</span>
+            </div>
+            <div class="event-col" id="event-col">
+                <div class="event" style="top: 20px; height: 60px;">
+                    <div class="event-title">Daily Standup</div>
+                    <div>9:00 - 9:45 AM</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 4. SLACK -->
+    <div class="pane slack-pane">
+        <div class="pane-header">💬 Slack - #general</div>
+        <div class="slack-messages" id="slack-msgs">
+            <div class="msg">
+                <div class="avatar"></div>
+                <div class="msg-content">
+                    <h4>David Kim <span>10:30 AM</span></h4>
+                    <p>Has anyone seen the latest numbers on the dashboard?</p>
+                </div>
+            </div>
+        </div>
+        <div class="slack-input-area">
+            <input type="text" class="slack-input" placeholder="Message #general">
+        </div>
+    </div>
+
+    <script>
+        // Simulations for the Watch & Strike demo
+
+        function receiveEmail() {
+            const list = document.getElementById('email-list');
+            const newEmail = document.createElement('div');
+            newEmail.className = 'email-item';
+            newEmail.style.background = '#e8f0fe';
+            newEmail.innerHTML = `
+                <div class="email-sender">Vercel Billing</div>
+                <div class="email-subj">Invoice #INV-2026-9042</div>
+                <div class="email-snippet" style="color:#000; font-weight:500;">
+                    Your new invoice for $120.00 from Vercel has been generated. Please review...
+                </div>
+            `;
+            list.insertBefore(newEmail, list.firstChild);
+        }
+
+        function addUrgentTask() {
+            const list = document.getElementById('task-list');
+            const newTask = document.createElement('div');
+            newTask.className = 'task';
+            newTask.innerHTML = `
+                <div class="checkbox"></div>
+                <span style="font-weight:600; color:#fff;">Fix critical login bug</span>
+                <span class="tag urgent">Urgent</span>
+            `;
+            list.appendChild(newTask);
+        }
+
+        function triggerMeeting() {
+            const col = document.getElementById('event-col');
+            const event = document.createElement('div');
+            event.className = 'event';
+            event.style.top = '120px'; // 10:30 AM
+            event.style.height = '60px';
+            event.style.borderLeftColor = '#ea4335';
+            event.style.background = '#fce8e6';
+            event.innerHTML = `
+                <div class="event-title" style="color:#ea4335;">Client Sync - Starts in 10 mins</div>
+                <div>10:30 - 11:30 AM</div>
+            `;
+            col.appendChild(event);
+        }
+    </script>
+</body>
+</html>
