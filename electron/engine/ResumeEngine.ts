@@ -73,12 +73,14 @@ export class ResumeEngine {
 
     // STEP 2: Primary Context Opens
     if (topWorkspaces.length > 0 || topApps.length > 0) {
+      const primaryApp = dominantApps.find(a => a && ['code', 'cursor', 'antigravity', 'vscode'].some(ide => a.toLowerCase().includes(ide)));
+      
       bus.emit('resume-sequence', { type: 'progress', message: `Restoring ${topWorkspaces.length + topApps.length} app(s)/workspace(s)`, item: 'vscode' });
       for (const path of topWorkspaces) {
-        this.openWorkspaceOrApp(path); // Fire and forget so we don't lag the UI
+        this.openWorkspaceOrApp(path, primaryApp); // Fire and forget so we don't lag the UI
       }
       for (const app of topApps) {
-        this.openWorkspaceOrApp(app);
+        this.openWorkspaceOrApp(app, primaryApp);
       }
       await new Promise(r => setTimeout(r, 600));
     }
@@ -134,13 +136,21 @@ export class ResumeEngine {
     }
   }
 
-  private async openWorkspaceOrApp(path: string) {
+  private async openWorkspaceOrApp(path: string, primaryApp?: string) {
     const targetLower = path.toLowerCase();
     console.log(`[ResumeEngine] Attempting to restore workspace or app: ${path}`);
 
     // If it's a known IDE string or directory path, open with the IDE natively
     if (path.includes('/') || path.includes('\\') || path.includes('.') || targetLower === 'code' || targetLower === 'cursor' || targetLower === 'vscode') {
-      exec(`code "${path}"`, (error) => {
+      let ideCmd = 'code';
+      if (primaryApp) {
+        const appLower = primaryApp.toLowerCase();
+        if (appLower.includes('cursor')) ideCmd = 'cursor';
+        else if (appLower.includes('antigravity')) ideCmd = 'antigravity';
+        // Expand IDE mappings here as needed
+      }
+
+      exec(`${ideCmd} "${path}"`, (error) => {
         if (error) shell.openPath(path);
       });
       return;

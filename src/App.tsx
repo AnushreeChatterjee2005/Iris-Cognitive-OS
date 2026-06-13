@@ -6,7 +6,7 @@ export default function App() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [activeSession, setActiveSession] = useState<any | null>(null);
   const [currentTab, setCurrentTab] = useState<'timeline' | 'chat'>('timeline');
-  const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'agent', text: string, action?: any }[]>([
+  const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'agent', text: string, sessionContext?: any, matchedUrl?: string, matchedFile?: string, actions?: any[] }>([
     { role: 'agent', text: 'Hello! I am your autonomous agent. I am silently capturing your workflow context. Ask me anything about what you were doing or what files you were editing!' }
   ]);
   const [chatInput, setChatInput] = useState('');
@@ -20,32 +20,77 @@ export default function App() {
     setTimeout(() => {
       const lowerQ = userMsg.toLowerCase();
       let responseText = "I checked your ambient timeline, but I couldn't find a direct match. Can you be more specific?";
-      let action: any = null;
+      let sessionContext: any = null;
+      let matchedUrl: string | undefined;
+      let matchedFile: string | undefined;
+      let actions: any[] = [];
 
-      if (lowerQ.includes('file') || lowerQ.includes('editing') || lowerQ.includes('code')) {
-        const fileSession = sessions.find(s => s.files && s.files.length > 0);
-        if (fileSession) {
-          responseText = `You were editing \`${fileSession.files[0]}\` during your "${fileSession.name}" session. Shall I restore that environment for you right now?`;
-          action = { 
-            ...fileSession, 
-            label: `Open ${fileSession.files[0]}` 
-          };
-        } else {
-          responseText = "You haven't been editing any files recently that I have captured in my context window.";
+      // Extract meaningful words from the query (ignore common stop words)
+      const stopWords = ['what', 'was', 'i', 'working', 'on', 'any', 'the', 'a', 'in', 'of', 'for', 'about', 'did', 'do', 'were'];
+      const keywords = lowerQ.split(/[\s?.,]+/).filter(w => w.length > 2 && !stopWords.includes(w));
+
+      // Try to find a session that matches the keywords
+      let bestSession = null;
+      let maxScore = 0;
+
+      for (const s of sessions) {
+        let score = 0;
+        const searchSpace = `${s.name || ''} ${s.contextSummary || ''} ${s.dominantApps?.join(' ') || ''} ${s.urls?.join(' ') || ''} ${s.files?.join(' ') || ''}`.toLowerCase();
+        
+        for (const kw of keywords) {
+          if (searchSpace.includes(kw)) {
+            score++;
+          }
         }
-      } else if (lowerQ.includes('url') || lowerQ.includes('web') || lowerQ.includes('research')) {
-        const urlSession = sessions.find(s => s.urls && s.urls.length > 0);
-        if (urlSession) {
-          responseText = `You were looking at \`${urlSession.urls[0]}\` during your "${urlSession.name}" session. I can reopen that web research for you.`;
-          action = { 
-            ...urlSession, 
-            files: [],
-            label: `Restore Web Research` 
-          };
+        
+        if (score > maxScore) {
+          maxScore = score;
+          bestSession = s;
         }
       }
 
-      setChatHistory(prev => [...prev, { role: 'agent', text: responseText, action }]);
+      if (bestSession && maxScore > 0) {
+        sessionContext = bestSession;
+        matchedUrl = bestSession.urls && bestSession.urls.length > 0 ? bestSession.urls[0] : undefined;
+        matchedFile = bestSession.files && bestSession.files.length > 0 ? bestSession.files[0] : undefined;
+
+        responseText = `I found a match in your ambient timeline! Shall I restore the entire environment, or just open the specific resource?`;
+        
+        actions.push({ 
+          ...bestSession, 
+          label: `Restore Entire Environment`,
+          icon: '⚡'
+        });
+        
+        if (matchedUrl) {
+          actions.push({
+            ...bestSession,
+            files: [], windowTitles: [], urls: [matchedUrl],
+            label: `Open Link Only`,
+            icon: '↗️'
+          });
+        }
+        
+        if (matchedFile) {
+          actions.push({
+            ...bestSession,
+            urls: [], windowTitles: [], files: [matchedFile],
+            label: `Open File Only`,
+            icon: '📄'
+          });
+        }
+      } else if (lowerQ.includes('file') || lowerQ.includes('editing')) {
+        const fileSession = sessions.find(s => s.files && s.files.length > 0);
+        if (fileSession) {
+          sessionContext = fileSession;
+          matchedFile = fileSession.files[0];
+          responseText = `I found a match in your timeline! Shall I restore the environment or open the file?`;
+          actions.push({ ...fileSession, label: `Restore Environment`, icon: '⚡' });
+          actions.push({ ...fileSession, urls: [], windowTitles: [], files: [matchedFile], label: `Open File Only`, icon: '📄' });
+        }
+      }
+
+      setChatHistory(prev => [...prev, { role: 'agent', text: responseText, sessionContext, matchedUrl, matchedFile, actions }]);
     }, 1000);
   };
 
@@ -111,17 +156,33 @@ export default function App() {
         } catch (e) {}
       });
     }
-    if (activeSession.files) {
-      activeSession.files.forEach((f: string) => {
-        const title = f.split(/[\\/]/).pop() || f;
-        trails.push({ type: 'file', title, summary: f, icon: '📄' });
-      });
+
+    // Determine primary IDE for grouping files
+    const apps = activeSession.dominantApps ? Array.from(new Set(activeSession.dominantApps.map((a: string) => formatAppName(a)))) : [];
+    const primaryIde = apps.find(a => a && ['VS Code', 'Cursor', 'Antigravity'].some(ide => (a as string).includes(ide)));
+
+    if (activeSession.files && activeSession.files.length > 0) {
+      if (primaryIde) {
+        trails.push({
+          type: 'ide_group',
+          ide: primaryIde,
+          files: activeSession.files.map((f: string) => ({
+            title: f.split(/[\\/]/).pop() || f,
+            value: f
+          }))
+        });
+      } else {
+        activeSession.files.forEach((f: string) => {
+          const title = f.split(/[\\/]/).pop() || f;
+          trails.push({ type: 'file', title, summary: f, icon: '📄' });
+        });
+      }
     }
+    
     if (activeSession.dominantApps) {
-      const uniqueApps = Array.from(new Set(activeSession.dominantApps.map((a: string) => formatAppName(a))));
-      uniqueApps.forEach((app: string) => {
-        const lower = app.toLowerCase();
-        if (app && lower !== 'chrome' && lower !== 'browser') {
+      apps.forEach((app: any) => {
+        const lower = (app as string).toLowerCase();
+        if (app && lower !== 'chrome' && lower !== 'browser' && app !== primaryIde) {
           trails.push({ type: 'app', title: app, summary: `Active workspace: ${app}`, icon: '💻' });
         }
       });
@@ -227,23 +288,44 @@ export default function App() {
                       <div style={{ marginTop: '10px' }}>
                         <div className="detail-section-title">Cognitive Discovery Trail</div>
                         <div className="discovery-trail-container" id={`discovery-trail-${activeSession.id}`}>
-                          {trails.map((t, i) => (
-                            t.type === 'domain_group' ? (
-                              <div key={i} className="domain-group">
-                                <div className="domain-group-header">
-                                  <span style={{ marginRight: '8px', fontSize: '0.8rem' }}>🌐</span>
-                                  <span style={{ flex: 1, fontWeight: 600, fontSize: '0.85rem' }}>{t.domain} ({t.nodes.length} pages)</span>
+                          {trails.map((t, i) => {
+                            if (t.type === 'domain_group') {
+                              return (
+                                <div key={i} className="domain-group">
+                                  <div className="domain-group-header">
+                                    <span style={{ marginRight: '8px', fontSize: '0.8rem' }}>🌐</span>
+                                    <span style={{ flex: 1, fontWeight: 600, fontSize: '0.85rem' }}>{t.domain} ({t.nodes.length} pages)</span>
+                                  </div>
+                                  <div className="domain-group-content">
+                                    {t.nodes.map((n: any, j: number) => (
+                                      <div key={j} style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
+                                        <input type="checkbox" defaultChecked={true} className="url-checkbox" value={n.value} style={{ marginRight: '8px', cursor: 'pointer' }} />
+                                        <span style={{ fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: 'var(--text-primary)' }} title={n.value}>{n.title}</span>
+                                      </div>
+                                    ))}
+                                  </div>
                                 </div>
-                                <div className="domain-group-content">
-                                  {t.nodes.map((n: any, j: number) => (
-                                    <div key={j} style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
-                                      <input type="checkbox" defaultChecked={true} className="url-checkbox" value={n.value} style={{ marginRight: '8px', cursor: 'pointer' }} />
-                                      <span style={{ fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: 'var(--text-primary)' }} title={n.value}>{n.title}</span>
-                                    </div>
-                                  ))}
+                              );
+                            }
+                            if (t.type === 'ide_group') {
+                              return (
+                                <div key={i} className="domain-group">
+                                  <div className="domain-group-header">
+                                    <span style={{ marginRight: '8px', fontSize: '0.8rem' }}>💻</span>
+                                    <span style={{ flex: 1, fontWeight: 600, fontSize: '0.85rem' }}>{t.ide} ({t.files.length} files)</span>
+                                  </div>
+                                  <div className="domain-group-content">
+                                    {t.files.map((f: any, j: number) => (
+                                      <div key={j} style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
+                                        <span style={{ marginRight: '8px', fontSize: '0.8rem' }}>📄</span>
+                                        <span style={{ fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: 'var(--text-primary)' }} title={f.value}>{f.title}</span>
+                                      </div>
+                                    ))}
+                                  </div>
                                 </div>
-                              </div>
-                            ) : (
+                              );
+                            }
+                            return (
                               <div key={i} className="trail-node">
                                 <div className="trail-node-dot"></div>
                                 <span className="trail-node-icon">{t.icon}</span>
@@ -252,8 +334,8 @@ export default function App() {
                                   <div className="trail-node-summary" title={t.summary}>{t.summary}</div>
                                 </div>
                               </div>
-                            )
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                       <div className="relationship-buckets">
@@ -332,16 +414,31 @@ export default function App() {
               <div className="chat-history">
                 {chatHistory.map((msg, i) => (
                   <div key={i} className={`chat-message ${msg.role}`}>
-                    {msg.text}
-                    {msg.action && (
-                      <div style={{ marginTop: '12px' }}>
-                        <button className="agentic-action-btn" onClick={() => {
-                          if ((window as any).electronAPI && (window as any).electronAPI.resumeWorkflow) {
-                            (window as any).electronAPI.resumeWorkflow(msg.action);
-                          }
-                        }}>
-                          ⚡ {msg.action.label || 'Execute Action'}
-                        </button>
+                    <div className="chat-text">{msg.text}</div>
+                    
+                    {msg.sessionContext && (
+                      <div className="chat-context-card">
+                         <div className="context-card-header">
+                            <span className="context-card-badge">SESSION MATCH</span>
+                            <span className="context-card-time">{new Date(msg.sessionContext.startTime).toLocaleTimeString()}</span>
+                         </div>
+                         <div className="context-card-title">{msg.sessionContext.name}</div>
+                         {msg.matchedUrl && <div className="context-card-detail">🌐 {msg.matchedUrl}</div>}
+                         {msg.matchedFile && <div className="context-card-detail">📄 {msg.matchedFile.split(/[\\/]/).pop()}</div>}
+                      </div>
+                    )}
+
+                    {msg.actions && msg.actions.length > 0 && (
+                      <div className="chat-actions-container">
+                        {msg.actions.map((act: any, j: number) => (
+                          <button key={j} className="agentic-action-btn" onClick={() => {
+                            if ((window as any).electronAPI && (window as any).electronAPI.resumeWorkflow) {
+                              (window as any).electronAPI.resumeWorkflow(act);
+                            }
+                          }}>
+                            {act.icon} {act.label}
+                          </button>
+                        ))}
                       </div>
                     )}
                   </div>

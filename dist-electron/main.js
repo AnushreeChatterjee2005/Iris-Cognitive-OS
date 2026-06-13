@@ -396,13 +396,19 @@ var ResumeEngine = class {
 		});
 		await new Promise((r) => setTimeout(r, 800));
 		if (topWorkspaces.length > 0 || topApps.length > 0) {
+			const primaryApp = dominantApps.find((a) => a && [
+				"code",
+				"cursor",
+				"antigravity",
+				"vscode"
+			].some((ide) => a.toLowerCase().includes(ide)));
 			bus.emit("resume-sequence", {
 				type: "progress",
 				message: `Restoring ${topWorkspaces.length + topApps.length} app(s)/workspace(s)`,
 				item: "vscode"
 			});
-			for (const path of topWorkspaces) this.openWorkspaceOrApp(path);
-			for (const app of topApps) this.openWorkspaceOrApp(app);
+			for (const path of topWorkspaces) this.openWorkspaceOrApp(path, primaryApp);
+			for (const app of topApps) this.openWorkspaceOrApp(app, primaryApp);
 			await new Promise((r) => setTimeout(r, 600));
 		}
 		if (relevantUrls.length > 0) {
@@ -447,11 +453,17 @@ var ResumeEngine = class {
 			return null;
 		}
 	}
-	async openWorkspaceOrApp(path) {
+	async openWorkspaceOrApp(path, primaryApp) {
 		const targetLower = path.toLowerCase();
 		console.log(`[ResumeEngine] Attempting to restore workspace or app: ${path}`);
 		if (path.includes("/") || path.includes("\\") || path.includes(".") || targetLower === "code" || targetLower === "cursor" || targetLower === "vscode") {
-			exec(`code "${path}"`, (error) => {
+			let ideCmd = "code";
+			if (primaryApp) {
+				const appLower = primaryApp.toLowerCase();
+				if (appLower.includes("cursor")) ideCmd = "cursor";
+				else if (appLower.includes("antigravity")) ideCmd = "antigravity";
+			}
+			exec(`${ideCmd} "${path}"`, (error) => {
 				if (error) shell.openPath(path);
 			});
 			return;

@@ -744,3 +744,63 @@
     border-color: rgba(0, 229, 255, 0.5);
     box-shadow: 0 0 10px rgba(0, 229, 255, 0.1);
 }
+
+/* --- CHAT CONTEXT CARD --- */
+.chat-context-card {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--border-accent);
+    border-radius: 12px;
+    padding: 16px;
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+}
+
+.context-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.context-card-badge {
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 1px;
+    color: var(--accent);
+    text-transform: uppercase;
+}
+
+.context-card-time {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-family: monospace;
+}
+
+.context-card-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.context-card-detail {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255,255,255,0.05);
+    padding: 8px 12px;
+    border-radius: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-actions-container {
+    display: flex;
+    gap: 12px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+}
