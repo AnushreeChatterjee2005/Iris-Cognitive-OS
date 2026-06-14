@@ -30,30 +30,42 @@ def capture_window(hwnd):
     width = right - left
     height = bottom - top
 
+    if width <= 0 or height <= 0:
+        return None
+
     hwndDC = win32gui.GetWindowDC(hwnd)
-    mfcDC  = win32ui.CreateDCFromHandle(hwndDC)
-    saveDC = mfcDC.CreateCompatibleDC()
+    mfcDC = None
+    saveDC = None
+    saveBitMap = None
+    img = None
+    result = 0
+    try:
+        mfcDC = win32ui.CreateDCFromHandle(hwndDC)
+        saveDC = mfcDC.CreateCompatibleDC()
 
-    saveBitMap = win32ui.CreateBitmap()
-    saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
-    saveDC.SelectObject(saveBitMap)
+        saveBitMap = win32ui.CreateBitmap()
+        saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+        saveDC.SelectObject(saveBitMap)
 
-    # PW_RENDERFULLCONTENT = 2 for Windows 8.1+, fallback to 3 for Chrome
-    result = windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 3)
-    
-    bmpinfo = saveBitMap.GetInfo()
-    bmpstr = saveBitMap.GetBitmapBits(True)
-    
-    img = np.frombuffer(bmpstr, dtype='uint8')
-    img.shape = (bmpinfo['bmHeight'], bmpinfo['bmWidth'], 4)
-    
-    win32gui.DeleteObject(saveBitMap.GetHandle())
-    saveDC.DeleteDC()
-    mfcDC.DeleteDC()
-    win32gui.ReleaseDC(hwnd, hwndDC)
+        result = windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 3)
+        
+        bmpinfo = saveBitMap.GetInfo()
+        bmpstr = saveBitMap.GetBitmapBits(True)
+        
+        img = np.frombuffer(bmpstr, dtype='uint8')
+        img.shape = (bmpinfo['bmHeight'], bmpinfo['bmWidth'], 4)
+    except Exception:
+        pass
+    finally:
+        if saveBitMap:
+            win32gui.DeleteObject(saveBitMap.GetHandle())
+        if saveDC:
+            saveDC.DeleteDC()
+        if mfcDC:
+            mfcDC.DeleteDC()
+        win32gui.ReleaseDC(hwnd, hwndDC)
 
-    if result == 1:
-        # Convert BGRA to BGR for EasyOCR / OpenCV consistency
+    if result == 1 and img is not None:
         return img[:, :, :3]
     return None
 
@@ -499,7 +511,7 @@ Example Output:
                 groq_contents = [groq_prompt]
                 if len(contents) > 1:
                     groq_contents.extend(contents[1:])
-                resp = call_llm_with_retry('llama-3.2-11b-vision-preview', groq_contents, task_id)
+                resp = call_llm_with_retry('llama-3.2-90b-vision-preview', groq_contents, task_id)
                 import re
                 json_match = re.search(r'\{.*\}', resp.text, re.DOTALL)
                 if json_match:
@@ -533,7 +545,7 @@ Example Output:
 
         # Native Desktop Execution (Layer 2: UIAutomation)
         uia_success = False
-        if "Chrome" not in target_title and "Edge" not in target_title:
+        if "Chrome" not in target_title and "Edge" not in target_title and action_type != "type":
             try:
                 from pywinauto import Desktop
                 ctrl = Desktop(backend="uia").from_point(tx, ty)
@@ -544,27 +556,21 @@ Example Output:
                         ctrl.click_input()
                     log_to_file(f"[{task_id}] UIA Native Execution Successful!")
                     uia_success = True
-                elif action_type == "type":
-                    # UIA can set text without moving the mouse!
-                    if hasattr(ctrl, 'set_edit_text'):
-                        ctrl.set_edit_text(str(values_to_type[0]))
-                    else:
-                        ctrl.type_keys(str(values_to_type[0]), with_spaces=True)
-                    log_to_file(f"[{task_id}] UIA Native Execution Successful!")
-                    uia_success = True
             except Exception as e:
                 log_to_file(f"[{task_id}] UIA Native Execution Failed: {e}. Falling back to Vision.")
 
         if not uia_success:
             # Layer 3: Vision Fallback (PyAutoGUI)
             try:
+                import pyperclip
                 pyautogui.click(x=final_tx, y=final_ty)
                 time.sleep(0.5)
 
                 if action_type == "type":
                     for r_idx, val in enumerate(values_to_type):
-                        # Write directly using keyboard simulation (bypasses Windows clipboard race conditions)
-                        pyautogui.write(str(val), interval=0.01)
+                        # Use pyperclip and ctrl+v for bulletproof multi-line and special character pasting
+                        pyperclip.copy(str(val))
+                        pyautogui.hotkey('ctrl', 'v')
                         if r_idx < len(values_to_type) - 1:
                             time.sleep(0.1)
                             pyautogui.press('tab')
@@ -640,7 +646,7 @@ Example Output:
                             img_rgb = cv2.cvtColor(cropped_img, cv2.COLOR_BGR2RGB)
                             pil_img = Image.fromarray(img_rgb)
                             eval_prompt = f"Does this image meet the following condition: '{condition}'? Answer EXACTLY 'YES' or 'NO'."
-                            resp = call_llm_with_retry('llama-3.2-11b-vision-preview', [eval_prompt, pil_img], task_id)
+                            resp = call_llm_with_retry('llama-3.2-90b-vision-preview', [eval_prompt, pil_img], task_id)
                         else:
                             # Send text to Groq instead of Image (Zero Cost & Ultra Fast!)
                             eval_prompt = f"Does the following text state meet this condition: '{condition}'? Answer EXACTLY 'YES' or 'NO'.\n\nText State:\n{extracted_text_lower[:5000]}"
