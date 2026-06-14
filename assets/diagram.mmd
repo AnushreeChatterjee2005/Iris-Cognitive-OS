@@ -1,0 +1,16 @@
+graph TD
+    subgraph The Modern Desktop
+        U((The User))
+    end
+
+    subgraph Passive OS Architecture
+        A[Terminal / Local App] -.->|No API| Vacuum((Context Vacuum<br/>State Loss))
+        B[Web Browser] -.->|No API| Vacuum
+    end
+
+    U ==>|Switches Tasks| A
+    U ==>|Loses Flow State| B
+    
+    style Vacuum fill:#ff4d4d,stroke:#333,color:#fff
+    style A fill:#1a1a1a,stroke:#888,color:#fff,stroke-dasharray: 5 5
+    style B fill:#1a1a1a,stroke:#888,color:#fff,stroke-dasharray: 5 5

@@ -2,15 +2,15 @@
 
 :root {
   --bg-deep: #0f0f0f;
-  --bg-panel: rgba(26, 20, 15, 0.8);
-  --border-subtle: rgba(255, 170, 0, 0.15);
-  --border-glow: rgba(255, 170, 0, 0.4);
+  --bg-panel: rgba(15, 20, 26, 0.8);
+  --border-subtle: rgba(74, 134, 232, 0.15);
+  --border-glow: rgba(74, 134, 232, 0.4);
   
-  --primary-accent: #b35900;
-  --primary-light: #ff8800;
-  --text-main: #ffedd6;
-  --text-muted: rgba(255, 237, 214, 0.4);
-  --accent-glow: #ffaa00;
+  --primary-accent: #2c5ba3;
+  --primary-light: #4a86e8;
+  --text-main: #d6eaff;
+  --text-muted: rgba(214, 234, 255, 0.4);
+  --accent-glow: #4a86e8;
 }
 
 * { box-sizing: border-box; }
@@ -51,9 +51,9 @@ body {
   top: -50%; left: -50%;
   width: 200%; height: 200%;
   background: 
-    radial-gradient(ellipse at 30% 30%, rgba(200, 80, 0, 0.3) 0%, transparent 50%),
-    radial-gradient(ellipse at 70% 60%, rgba(255, 120, 0, 0.25) 0%, transparent 50%),
-    radial-gradient(ellipse at 50% 80%, rgba(20, 80, 180, 0.35) 0%, transparent 60%);
+    radial-gradient(ellipse at 30% 30%, rgba(74, 134, 232, 0.3) 0%, transparent 50%),
+    radial-gradient(ellipse at 70% 60%, rgba(44, 91, 163, 0.25) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(100, 150, 250, 0.35) 0%, transparent 60%);
   filter: blur(60px);
   opacity: 0.6;
   animation: cognitiveBreathe 30s linear infinite;
@@ -187,25 +187,25 @@ body {
 .feature-box:hover {
   background-color: rgba(255, 255, 255, 0.04);
   transform: translateY(-4px) scale(1.02);
-  border-color: rgba(255, 170, 0, 0.3);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6), 0 0 30px rgba(255, 170, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  border-color: rgba(74, 134, 232, 0.3);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6), 0 0 30px rgba(74, 134, 232, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .feature-icon {
   width: 100%;
   flex: 1;
   border-radius: 10px;
-  background: rgba(255, 170, 0, 0.06);
+  background: rgba(74, 134, 232, 0.06);
   color: var(--primary-light);
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(255, 170, 0, 0.15);
+  border: 1px solid rgba(74, 134, 232, 0.15);
   transition: all 0.2s ease;
 }
 
 .feature-box:hover .feature-icon {
-  background: rgba(255, 170, 0, 0.12);
+  background: rgba(74, 134, 232, 0.12);
   transform: scale(0.96);
 }
 
@@ -638,7 +638,7 @@ body {
   left: 50%;
   transform: translateX(-50%);
   background: rgba(4, 6, 8, 0.85);
-  border: 1px solid rgba(255, 170, 0, 0.3);
+  border: 1px solid rgba(74, 134, 232, 0.3);
   padding: 12px 24px;
   border-radius: 8px;
   color: #fff;
@@ -968,7 +968,7 @@ body {
 }
 
 .detail-restore-btn {
-    background: rgba(255, 170, 0, 0.1);
+    background: rgba(74, 134, 232, 0.1);
     color: var(--primary-light);
     border: 1px solid var(--primary-light);
     padding: 10px 20px;
@@ -982,7 +982,7 @@ body {
     gap: 8px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    box-shadow: 0 0 15px rgba(255, 170, 0, 0.1);
+    box-shadow: 0 0 15px rgba(74, 134, 232, 0.1);
     transition: all 0.2s;
 }
 
@@ -994,7 +994,7 @@ body {
 
 .explanation-box {
     padding: 14px 18px;
-    background: rgba(255, 170, 0, 0.05);
+    background: rgba(74, 134, 232, 0.05);
     border-left: 3px solid var(--primary-light);
     border-radius: 0 12px 12px 0;
     font-size: 0.88rem;
@@ -1030,7 +1030,7 @@ body {
     bottom: 6px;
     left: 5px;
     width: 1px;
-    background: linear-gradient(180deg, var(--primary-light) 0%, rgba(255,170,0,0.04) 100%);
+    background: linear-gradient(180deg, var(--primary-light) 0%, rgba(74, 134, 232, 0.04) 100%);
     opacity: 0.4;
 }
 
@@ -1086,8 +1086,8 @@ body {
 }
 
 .domain-group {
-    background: rgba(255,170,0,0.02);
-    border: 1px solid rgba(255,170,0,0.1);
+    background: rgba(74, 134, 232, 0.02);
+    border: 1px solid rgba(74, 134, 232, 0.1);
     border-radius: 6px;
     margin: 8px 0;
     margin-left: 20px;
@@ -1102,7 +1102,7 @@ body {
 
 .domain-group-content {
     padding: 8px 12px;
-    border-top: 1px solid rgba(255,170,0,0.1);
+    border-top: 1px solid rgba(74, 134, 232, 0.1);
 }
 
 .relationship-buckets {
@@ -1112,7 +1112,7 @@ body {
 }
 
 .bucket-card {
-    background: rgba(255, 170, 0, 0.02);
+    background: rgba(74, 134, 232, 0.02);
     border: 1px solid var(--border-subtle);
     border-radius: 14px;
     padding: 16px;
@@ -1129,7 +1129,7 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.05em;
     margin-bottom: 8px;
-    border-bottom: 1px solid rgba(255, 170, 0, 0.1);
+    border-bottom: 1px solid rgba(74, 134, 232, 0.1);
     padding-bottom: 6px;
 }
 
@@ -1145,7 +1145,7 @@ body {
 }
 
 .bucket-item:hover {
-    background: rgba(255, 170, 0, 0.1);
+    background: rgba(74, 134, 232, 0.1);
     color: var(--primary-light);
 }
 

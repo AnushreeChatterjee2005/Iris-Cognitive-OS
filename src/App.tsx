@@ -1,17 +1,229 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import './dashboard.css';
 import { CanvasGrid } from './CanvasGrid';
 import { TimelineAgent } from './ai/timelineAgent';
+import { Globe } from 'lucide-react';
+
+function SearchOverlay() {
+  const [status, setStatus] = useState('idle'); // idle, drawing_source, drawing_target, typing, running, finished
+  const [sourceBox, setSourceBox] = useState<any>(null);
+  const [targetBox, setTargetBox] = useState<any>(null);
+  const [currentBox, setCurrentBox] = useState<any>(null);
+  const [startPos, setStartPos] = useState<any>(null);
+  
+  const [actionType, setActionType] = useState('when'); // now, when, always
+  const [command, setCommand] = useState('');
+  
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (status !== 'idle' && status !== 'drawing_target') return;
+    setStartPos({ x: e.clientX, y: e.clientY });
+    setStatus(status === 'idle' ? 'drawing_source' : 'drawing_target');
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!startPos) return;
+    if (status === 'drawing_source' || status === 'drawing_target') {
+      setCurrentBox({
+        x: Math.min(startPos.x, e.clientX),
+        y: Math.min(startPos.y, e.clientY),
+        w: Math.abs(startPos.x - e.clientX),
+        h: Math.abs(startPos.y - e.clientY)
+      });
+    }
+  };
+
+  const handleMouseUp = () => {
+    if (!startPos || !currentBox) {
+      setStartPos(null);
+      return;
+    }
+    
+    if (status === 'drawing_source') {
+      setSourceBox(currentBox);
+      setStatus('drawing_target');
+    } else if (status === 'drawing_target') {
+      setTargetBox(currentBox);
+      setStatus('typing');
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+    
+    setCurrentBox(null);
+    setStartPos(null);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      setStatus('running');
+      fetch('http://127.0.0.1:8000/api/watch-and-strike', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_bbox: sourceBox,
+          target_bbox: targetBox,
+          condition: command,
+          action_text: "",
+          mode: actionType
+        })
+      }).then(() => {
+        setStatus('finished');
+        setTimeout(() => {
+          window.dispatchEvent(new Event('electron-window-hidden'));
+          setStatus('idle');
+          setSourceBox(null);
+          setTargetBox(null);
+          setCommand('');
+        }, 2000);
+      }).catch((err) => {
+        console.error(err);
+        setStatus('finished');
+        setTimeout(() => setStatus('idle'), 2000);
+      });
+    } else if (e.key === 'Escape') {
+      if (status === 'typing') {
+        setStatus('drawing_target');
+        setTargetBox(null);
+      } else if (status === 'drawing_target') {
+        setStatus('idle');
+        setSourceBox(null);
+      } else {
+        window.dispatchEvent(new Event('electron-window-hidden'));
+      }
+    }
+  };
+
+  let arrowPath = '';
+  if (status === 'typing' && sourceBox && targetBox) {
+    const sx = sourceBox.x + sourceBox.w / 2;
+    const sy = sourceBox.y + sourceBox.h / 2;
+    const tx = targetBox.x + targetBox.w / 2;
+    const ty = targetBox.y + targetBox.h / 2;
+    
+    // Draw a curved bezier line connecting them
+    const isHorizontal = Math.abs(tx - sx) > Math.abs(ty - sy);
+    let a=sx, o=sy, s=tx, c=ty, l=sx, d=sy, p=tx, m=ty;
+    if (isHorizontal) {
+      a = tx > sx ? sourceBox.x + sourceBox.w + 6 : sourceBox.x - 6;
+      s = tx > sx ? targetBox.x - 6 : targetBox.x + targetBox.w + 6;
+      const t = Math.abs(s - a) * 0.5;
+      l = tx > sx ? a + t : a - t;
+      p = tx > sx ? s - t : s + t;
+    } else {
+      o = ty > sy ? sourceBox.y + sourceBox.h + 6 : sourceBox.y - 6;
+      c = ty > sy ? targetBox.y - 6 : targetBox.y + targetBox.h + 6;
+      const t = Math.abs(c - o) * 0.5;
+      d = ty > sy ? o + t : o - t;
+      m = ty > sy ? c - t : c + t;
+    }
+    arrowPath = `M ${a},${o} C ${l},${d} ${p},${m} ${s},${c}`;
+  }
+
+  const toastStyle: React.CSSProperties = { position: 'absolute', top: '40px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.8)', color: 'white', padding: '12px 24px', borderRadius: '30px', zIndex: 10, border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)', fontFamily: "'Outfit', sans-serif" };
+  const boxStyle: React.CSSProperties = { position: 'absolute', border: '2px solid', background: 'rgba(255,255,255,0.1)', zIndex: 10, pointerEvents: 'none' };
+  const modeStyle = (active: boolean): React.CSSProperties => ({ cursor: 'pointer', padding: '6px 12px', borderRadius: '6px', background: active ? 'rgba(255,255,255,0.1)' : 'transparent', border: active ? '1px solid rgba(255,255,255,0.2)' : '1px solid transparent' });
+  const pillStyle: React.CSSProperties = { position: 'absolute', bottom: '40px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(20,20,20,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '30px', padding: '12px 24px', display: 'flex', alignItems: 'center', gap: '12px', color: 'white', zIndex: 10, boxShadow: '0 20px 40px rgba(0,0,0,0.5)', fontFamily: "'Outfit', sans-serif" };
+
+  return (
+    <div className={`watch-overlay active`} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} style={{ width: '100vw', height: '100vh', position: 'fixed', top: 0, left: 0, overflow: 'hidden', cursor: status === 'idle' || status === 'drawing_target' ? 'crosshair' : 'default', background: 'transparent' }}>
+      
+      {status !== 'running' && (
+        <svg className="sweep-dim-bg" style={{ position: 'absolute', pointerEvents: 'none', zIndex: 5, width: '100%', height: '100%' }}>
+          <defs>
+            <mask id="hole-mask">
+              <rect width="100%" height="100%" fill="white" />
+              {sourceBox && <rect x={sourceBox.x} y={sourceBox.y} width={sourceBox.w} height={sourceBox.h} fill="black" />}
+              {targetBox && <rect x={targetBox.x} y={targetBox.y} width={targetBox.w} height={targetBox.h} fill="black" />}
+              {currentBox && <rect x={currentBox.x} y={currentBox.y} width={currentBox.w} height={currentBox.h} fill="black" />}
+            </mask>
+          </defs>
+          <rect width="100%" height="100%" fill="rgba(0, 0, 0, 0.75)" mask="url(#hole-mask)" />
+        </svg>
+      )}
+
+      {status === 'idle' && <div className="instruction-toast" style={toastStyle}>Draw a bounding box around the SOURCE trigger zone</div>}
+      {status === 'drawing_target' && <div className="instruction-toast" style={toastStyle}>Draw a bounding box around the TARGET input field</div>}
+
+      {sourceBox && status !== 'running' && <div className="drawn-box final" style={{ ...boxStyle, borderColor: '#f39c12', left: sourceBox.x, top: sourceBox.y, width: sourceBox.w, height: sourceBox.h }} />}
+      {targetBox && status !== 'running' && <div className="drawn-box final target" style={{ ...boxStyle, borderColor: '#3498db', left: targetBox.x, top: targetBox.y, width: targetBox.w, height: targetBox.h }} />}
+      {currentBox && status !== 'running' && status !== 'typing' && <div className="drawn-box drawing" style={{ ...boxStyle, borderColor: status === 'drawing_target' ? '#3498db' : '#f39c12', left: currentBox.x, top: currentBox.y, width: currentBox.w, height: currentBox.h }} />}
+
+      {status !== 'running' && arrowPath && (
+        <svg className="arrow-canvas" style={{ position: 'absolute', pointerEvents: 'none', zIndex: 6, width: '100%', height: '100%' }}>
+          <defs>
+            <marker id="node-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
+              <path d="M 0 0 L 8 4 L 0 8 z" fill="rgba(255, 255, 255, 0.8)" />
+            </marker>
+          </defs>
+          <path d={arrowPath} fill="none" stroke="rgba(255, 255, 255, 0.6)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" markerEnd="url(#node-arrow)" opacity="0.9" />
+        </svg>
+      )}
+
+      {status === 'typing' && targetBox && (
+        <div className="command-floater" style={{ position: 'absolute', zIndex: 10, left: Math.max(200, Math.min(targetBox.x, window.innerWidth - 400)), top: Math.max(160, targetBox.y - 120), background: 'rgba(20, 20, 20, 0.95)', border: '1px solid rgba(255,255,255,0.1)', padding: '16px', borderRadius: '12px', width: '400px', backdropFilter: 'blur(10px)', boxShadow: '0 20px 40px rgba(0,0,0,0.5)', fontFamily: "'Outfit', sans-serif" }}>
+          <div className="mode-selector" style={{ display: 'flex', gap: '8px', marginBottom: '16px', fontSize: '14px' }}>
+            <span onClick={() => setActionType('now')} style={modeStyle(actionType === 'now')}>⚡ Now</span>
+            <span onClick={() => setActionType('when')} style={modeStyle(actionType === 'when')}>⏳ When</span>
+            <span onClick={() => setActionType('always')} style={modeStyle(actionType === 'always')}>♾️ Always</span>
+          </div>
+          <input 
+            ref={inputRef}
+            type="text" 
+            className="command-input" 
+            placeholder={actionType === 'now' ? "e.g. Extract the Vendor Name and Amount" : "e.g. When this says 'Success', type 'Done' here"}
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            onKeyDown={handleKeyDown}
+            style={{ width: '100%', background: 'rgba(0,0,0,0.5)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', padding: '12px', borderRadius: '8px', outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit' }}
+          />
+        </div>
+      )}
+
+      {status === 'running' && (
+        <div style={pillStyle}>
+          <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
+          <div className="pill-spinner" style={{ width: '16px', height: '16px', border: '2px solid transparent', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontWeight: 'bold' }}>{actionType === 'now' ? 'Extracting' : 'Watching'}</span>
+            <span style={{ fontSize: '12px', opacity: 0.8 }}>{command}</span>
+          </div>
+        </div>
+      )}
+
+      {status === 'finished' && (
+        <div style={{ ...pillStyle, background: 'linear-gradient(135deg, rgba(46,204,113,0.9), rgba(39,174,96,0.9))' }}>
+          <div style={{ fontSize: '18px' }}>✅</div>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontWeight: 'bold' }}>Action Completed</span>
+            <span style={{ fontSize: '12px', opacity: 0.8 }}>Returning control...</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function App() {
+  const [route, setRoute] = useState(window.location.hash || '#/');
+
+  useEffect(() => {
+    const onHashChange = () => setRoute(window.location.hash || '#/');
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  if (route === '#/search') {
+    return <SearchOverlay />;
+  }
+
   const [sessions, setSessions] = useState<any[]>([]);
-  const [activeSession, setActiveSession] = useState<any | null>(null);
+  const [activeSession, setActiveSession] = useState<any>(null);
   const [currentTab, setCurrentTab] = useState<'timeline' | 'chat'>('timeline');
-  const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'agent', text: string, sessionContext?: any, matchedUrl?: string, matchedFile?: string, actions?: any[] }>([
+  const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'agent', text: string, sessionContext?: any, matchedUrl?: string, matchedFile?: string, actions?: any[] }[]>([
     { role: 'agent', text: 'Hello! I am your autonomous agent. I am silently capturing your workflow context. Ask me anything about what you were doing or what files you were editing!' }
   ]);
   const [chatInput, setChatInput] = useState('');
-  const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY || '');
+  const [apiKey] = useState(localStorage.getItem('gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY || '');
   const [isAiTyping, setIsAiTyping] = useState(false);
 
   const handleChatSubmit = async () => {
@@ -92,7 +304,7 @@ export default function App() {
           }
           return [update, ...prev];
         });
-        setActiveSession(prev => (prev && prev.id === update.id) || !prev ? update : prev);
+        setActiveSession((prev: any) => (prev && prev.id === update.id) || !prev ? update : prev);
       });
     }
 
@@ -183,7 +395,7 @@ export default function App() {
       <div className="global-layout">
         <aside className="global-sidebar">
           <div className="sidebar-top">
-            <div className="sidebar-logo">I</div>
+            <div className="sidebar-logo"><img src="/sidebar-logo.png" alt="IRIS" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /></div>
           </div>
           <div className="sidebar-nav">
             <div className={`nav-item ${currentTab === 'timeline' ? 'active' : ''}`} title="Timeline Dashboard" onClick={() => setCurrentTab('timeline')}>
@@ -232,7 +444,7 @@ export default function App() {
                           </div>
                           <div className="session-summary">{s.contextSummary || 'Synthesizing local cognitive trail patterns...'}</div>
                           <div className="app-tags">
-                            {s.dominantApps && Array.from(new Set(s.dominantApps.map((a: string) => formatAppName(a)))).map((app: string) => (
+                            {s.dominantApps && Array.from(new Set(s.dominantApps.map((a: string) => formatAppName(a))) as Set<string>).map((app: string) => (
                               <span key={app} className="app-tag">{app}</span>
                             ))}
                           </div>
@@ -281,7 +493,7 @@ export default function App() {
                               return (
                                 <div key={i} className="domain-group">
                                   <div className="domain-group-header">
-                                    <span style={{ marginRight: '8px', fontSize: '0.8rem' }}>🌐</span>
+                                    <span style={{ marginRight: '8px', display: 'inline-flex', alignItems: 'center' }}><Globe size={14} color="var(--accent)" /></span>
                                     <span style={{ flex: 1, fontWeight: 600, fontSize: '0.85rem' }}>{t.domain} ({t.nodes.length} pages)</span>
                                   </div>
                                   <div className="domain-group-content">
@@ -343,7 +555,7 @@ export default function App() {
                               try { domain = new URL(u).hostname; } catch(e) {}
                               return (
                                 <div key={i} className="bucket-item" title={u}>
-                                  <span className="bucket-item-icon">🌐</span>
+                                  <span className="bucket-item-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Globe size={14} color="var(--accent)" /></span>
                                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{domain}</span>
                                 </div>
                               );
@@ -411,7 +623,7 @@ export default function App() {
                             <span className="context-card-time">{new Date(msg.sessionContext.startTime).toLocaleTimeString()}</span>
                          </div>
                          <div className="context-card-title">{msg.sessionContext.name}</div>
-                         {msg.matchedUrl && <div className="context-card-detail">🌐 {msg.matchedUrl}</div>}
+                         {msg.matchedUrl && <div className="context-card-detail" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Globe size={12} color="var(--accent)" /> {msg.matchedUrl}</div>}
                          {msg.matchedFile && <div className="context-card-detail">📄 {msg.matchedFile.split(/[\\/]/).pop()}</div>}
                       </div>
                     )}

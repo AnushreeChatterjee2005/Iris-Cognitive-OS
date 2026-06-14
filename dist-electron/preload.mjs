@@ -1,17 +1,1 @@
-let electron = require("electron");
-//#region electron/preload.ts
-electron.contextBridge.exposeInMainWorld("electronAPI", {
-	hideWindow: () => electron.ipcRenderer.send("hide-window"),
-	setClickThrough: (ignore) => electron.ipcRenderer.send("set-click-through", ignore),
-	setIgnoreBlur: (ignore) => electron.ipcRenderer.send("set-ignore-blur", ignore),
-	setHasPipelines: (hasPipelines) => electron.ipcRenderer.send("set-has-pipelines", hasPipelines),
-	parseIntent: (text) => electron.ipcRenderer.invoke("parse-intent", text),
-	readWorkspaceFiles: () => electron.ipcRenderer.invoke("read-workspace-files"),
-	saveSemanticIndex: (data) => electron.ipcRenderer.invoke("save-semantic-index", data),
-	loadSemanticIndex: () => electron.ipcRenderer.invoke("load-semantic-index"),
-	onWorkflowUpdate: (callback) => electron.ipcRenderer.on("workflow-update", (event, workflow) => callback(workflow)),
-	onActivityEvent: (callback) => electron.ipcRenderer.on("activity-event", (event, activity) => callback(activity)),
-	searchMemory: (query) => electron.ipcRenderer.invoke("search-memory", query),
-	resumeWorkflow: (session) => electron.ipcRenderer.invoke("resume-workflow", session)
-});
-//#endregion
+let e=require("electron");e.contextBridge.exposeInMainWorld(`electronAPI`,{hideWindow:()=>e.ipcRenderer.send(`hide-window`),setClickThrough:t=>e.ipcRenderer.send(`set-click-through`,t),setIgnoreBlur:t=>e.ipcRenderer.send(`set-ignore-blur`,t),setHasPipelines:t=>e.ipcRenderer.send(`set-has-pipelines`,t),parseIntent:t=>e.ipcRenderer.invoke(`parse-intent`,t),readWorkspaceFiles:()=>e.ipcRenderer.invoke(`read-workspace-files`),saveSemanticIndex:t=>e.ipcRenderer.invoke(`save-semantic-index`,t),loadSemanticIndex:()=>e.ipcRenderer.invoke(`load-semantic-index`),onWorkflowUpdate:t=>e.ipcRenderer.on(`workflow-update`,(e,n)=>t(n)),onActivityEvent:t=>e.ipcRenderer.on(`activity-event`,(e,n)=>t(n)),searchMemory:t=>e.ipcRenderer.invoke(`search-memory`,t),resumeWorkflow:t=>e.ipcRenderer.invoke(`resume-workflow`,t)});

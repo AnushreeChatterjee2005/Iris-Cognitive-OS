@@ -1,18 +1,22 @@
 .iris-dashboard-scope {
     width: 100vw; height: 100vh; background-color: var(--bg); color: var(--text-primary); font-family: 'Inter', sans-serif; overflow: hidden;
     --bg: #0f0f0f;
-    --surface: rgba(26, 20, 15, 0.8);
-    --surface-hover: rgba(255, 170, 0, 0.08);
-    --text-primary: #ffedd6;
-    --text-secondary: rgba(255, 237, 214, 0.5);
-    --accent: #ff8800;
-    --accent-glow: rgba(255, 170, 0, 0.4);
-    --border: rgba(255, 170, 0, 0.15);
-    --border-accent: rgba(255, 170, 0, 0.4);
+    --surface: rgba(15, 20, 26, 0.8);
+    --surface-hover: rgba(74, 134, 232, 0.08);
+    --text-primary: #d6eaff;
+    --text-secondary: rgba(214, 234, 255, 0.5);
+    --accent: #4a86e8;
+    --accent-glow: rgba(74, 134, 232, 0.4);
+    --border: rgba(74, 134, 232, 0.15);
+    --border-accent: rgba(74, 134, 232, 0.4);
     --curve: cubic-bezier(0.16, 1, 0.3, 1);
 }
         
         * { box-sizing: border-box; }
+        
+        input[type="checkbox"] {
+            accent-color: var(--accent);
+        }
         
         
 
@@ -60,9 +64,10 @@
 
         h1 { 
             margin: 0; 
-            font-size: 1.35rem; 
-            font-weight: 500; 
-            letter-spacing: 0.1em;
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.5rem; 
+            font-weight: 600; 
+            letter-spacing: 0.15em;
             text-transform: uppercase;
         }
 
@@ -143,7 +148,7 @@
         .session-card.active-card { 
             transform: translateY(-2px); 
             border-color: var(--border-accent);
-            box-shadow: 0 10px 30px -10px rgba(255, 170, 0, 0.1);
+            box-shadow: 0 10px 30px -10px rgba(74, 134, 232, 0.1);
             background: var(--surface-hover);
         }
 
@@ -267,8 +272,8 @@
         }
         
         .search-result-card {
-            background: rgba(255, 170, 0, 0.03);
-            border: 1px solid rgba(255, 170, 0, 0.1);
+            background: rgba(74, 134, 232, 0.03);
+            border: 1px solid rgba(74, 134, 232, 0.1);
             border-radius: 12px;
             padding: 16px;
             cursor: pointer;
@@ -276,8 +281,8 @@
         }
         
         .search-result-card:hover {
-            background: rgba(255, 170, 0, 0.08);
-            border-color: rgba(255, 170, 0, 0.3);
+            background: rgba(74, 134, 232, 0.08);
+            border-color: rgba(74, 134, 232, 0.3);
             transform: translateY(-1px);
         }
         
@@ -314,9 +319,9 @@
         }
 
         @keyframes svgPulse {
-            0% { transform: scale(1); filter: drop-shadow(0 0 8px rgba(255, 170, 0, 0.4)); }
+            0% { transform: scale(1); filter: drop-shadow(0 0 8px rgba(74, 134, 232, 0.4)); }
             50% { transform: scale(1.08); filter: drop-shadow(0 0 25px rgba(255, 136, 0, 0.8)); }
-            100% { transform: scale(1); filter: drop-shadow(0 0 8px rgba(255, 170, 0, 0.4)); }
+            100% { transform: scale(1); filter: drop-shadow(0 0 8px rgba(74, 134, 232, 0.4)); }
         }
 
         .detail-empty-title {
@@ -367,7 +372,7 @@
             gap: 8px;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            box-shadow: 0 0 15px rgba(255, 170, 0, 0.25);
+            box-shadow: 0 0 15px rgba(74, 134, 232, 0.25);
             transition: all 0.2s var(--curve);
         }
 
@@ -500,9 +505,9 @@
         }
 
         .micro-restore-btn {
-            background: rgba(255, 170, 0, 0.1);
+            background: rgba(74, 134, 232, 0.1);
             color: var(--accent);
-            border: 1px solid rgba(255, 170, 0, 0.2);
+            border: 1px solid rgba(74, 134, 232, 0.2);
             border-radius: 4px;
             padding: 2px 6px;
             font-size: 0.6rem;
@@ -513,8 +518,8 @@
         }
 
         .micro-restore-btn:hover {
-            background: rgba(255, 170, 0, 0.25);
-            border-color: rgba(255, 170, 0, 0.4);
+            background: rgba(74, 134, 232, 0.25);
+            border-color: rgba(74, 134, 232, 0.4);
         }
 
         .bucket-item {
@@ -575,10 +580,9 @@
         }
         
         .sidebar-logo {
-            width: 32px; height: 32px;
-            background: linear-gradient(135deg, var(--accent), #ffaa00);
-            border-radius: 8px; display: flex; justify-content: center; align-items: center;
-            font-weight: 700; font-size: 1rem; color: #000;
+            width: 48px; height: 48px;
+            background: transparent;
+            display: flex; justify-content: center; align-items: center;
         }
 
         .sidebar-nav {
@@ -597,7 +601,7 @@
         }
 
         .nav-item.active {
-            color: var(--accent); background: rgba(255, 170, 0, 0.1); box-shadow: 0 0 15px rgba(255, 170, 0, 0.2);
+            color: var(--accent); background: rgba(74, 134, 232, 0.1); box-shadow: 0 0 15px rgba(74, 134, 232, 0.2);
         }
 
         .sidebar-bottom { margin-top: auto; }
@@ -638,7 +642,7 @@
     width: 32px;
     height: 32px;
     border-radius: 8px;
-    background: rgba(255, 170, 0, 0.15);
+    background: rgba(74, 134, 232, 0.15);
     color: var(--accent);
     display: flex;
     align-items: center;
@@ -665,8 +669,8 @@
 
 .chat-message.user {
     align-self: flex-end;
-    background: rgba(255, 170, 0, 0.1);
-    border: 1px solid rgba(255, 170, 0, 0.2);
+    background: rgba(74, 134, 232, 0.1);
+    border: 1px solid rgba(74, 134, 232, 0.2);
     color: var(--text-primary);
     border-bottom-right-radius: 4px;
 }
@@ -700,7 +704,7 @@
 
 .chat-input:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 15px rgba(255, 170, 0, 0.15);
+    box-shadow: 0 0 15px rgba(74, 134, 232, 0.15);
 }
 
 .chat-send-btn {

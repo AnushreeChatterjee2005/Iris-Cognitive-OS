@@ -10,8 +10,8 @@ export function CanvasGrid() {
     if (!ctx) return;
 
     const speed = 0.28;
-    const borderColor = 'rgba(255, 170, 0, 0.05)';
-    const hoverFillColor = 'rgba(255, 170, 0, 0.08)';
+    const borderColor = 'rgba(74, 134, 232, 0.05)';
+    const hoverFillColor = 'rgba(74, 134, 232, 0.08)';
     const squareSize = 46;
     const hoverTrailAmount = 4;
 

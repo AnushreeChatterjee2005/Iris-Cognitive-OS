@@ -1,73 +1,74 @@
-# React + TypeScript + Vite
+<div align="center">
+  <img src="assets/logo.png" alt="IRIS Logo" width="250">
+  
+  # IRIS: The Intelligence Layer Between You and Your OS
+  
+  **Universal OS Automation & Workflow Memory**  
+  *No APIs. No Integrations. If a human can see it and click it, IRIS can work with it.*
+</div>
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+---
 
-Currently, two official plugins are available:
+## ⚠️ The Fragmentation of OS-Level Automation
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **The "State Loss" Problem:** Modern OS architectures are volatile state machines. They instantly drop contextual memory the second a user switches tasks, forcing humans to manually reconstruct complex workflows.
+- **The API Barrier:** Existing tools (Zapier, Make) rely on rigid, vendor-provided APIs. They are mathematically incapable of automating proprietary apps, local legacy software, or offline systems.
+- **Fragile Static RPA:** Traditional macro bots blindly click fixed coordinates. They lack "Visual Independence" and break instantly during UI updates or window resizing.
+- **The "Passive" OS Vulnerability:** Current operating systems blindly render pixels. They lack an "Intelligence Layer"—they cannot analyze the intent of a cross-app workflow without human intervention.
 
-## React Compiler
+## 🧠 What is IRIS?
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+IRIS is an **Active Intelligence Layer** that sits natively between you and your Operating System. 
 
-## Expanding the ESLint configuration
+It completely bypasses vendor APIs, allowing you to pipe data from any application on your screen to any other application using natural language and visual intent. 
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- **Ambient State Sync:** IRIS is a continuous memory engine. It silently parses your screen to build a mathematically searchable, permanent timeline of your cross-app workflow.
+- **Spatial Interaction Model:** IRIS operates on pure human-level vision. Trigger a global `Ctrl+K` overlay, draw a bounding box over your source data, draw an arrow to your destination input, and type your execution rule.
+- **Event-Driven Automation:** IRIS is a proactive execution agent. It watches for user-defined visual triggers and fires synthetic background OS events the exact millisecond a condition is met.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## 🚀 The Three Execution Modes
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+### 1. NOW (Ad-Hoc Routing)
+Point at data on one app. Point at a form on another. Type: *"Extract this invoice and populate it."* IRIS maps the data fields semantically and uses OS accessibility hooks to fill the target instantly—without taking over your mouse.
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+### 2. WHEN (Watch & Strike)
+The core event loop. Draw a trigger zone, draw a target arrow, and type *"When this says 'Success', click that button."* IRIS spins up an isolated background thread, polls the screen zone, and fires the click event autonomously upon a state match. You walk away from the keyboard.
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### 3. ALWAYS (Continuous Sync) & TIMELINE (State Restoration)
+Keeps disconnected apps perfectly synced without network API calls. Simultaneously, IRIS logs your active environment into a local database. Use the query drawer to ask *"What file was I editing during my presentation review?"* to instantly restore an exact workspace.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+---
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## 🛠️ Tech Stack & Architecture
+
+**The Three-Layer Hybrid Engine**
+
+IRIS ensures zero-ambiguity text and UI extraction by utilizing a 3-layer hybrid fallback system:
+1. **Layer 1 (The Web):** `Playwright` hooks directly into the browser DOM via CDP for perfect, zero-latency extraction.
+2. **Layer 2 (Native OS):** `pywinauto` leverages native Windows UI Automation APIs to read app structures as queryable objects and fire invisible background clicks (no cursor hijacking).
+3. **Layer 3 (Fallback Vision):** If an app blocks accessibility, IRIS gracefully falls back to `EasyOCR` for localized pixel extraction.
+
+**Core Infrastructure:**
+- **Frontend Overlay:** Electron, React, TypeScript.
+- **Core Engine:** Python daemon running a FastAPI server.
+- **Intent Engine:** Local LLMs (Llama 3 via Ollama) parse automation commands, while Gemini 2.5 Flash maps unstructured text fields.
+- **State Memory:** `ChromaDB` stores vector embeddings of past UI interactions to instantly resolve future routing commands.
+
+## ⚙️ Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/Hackathon_IRIS.git
+
+# Install Frontend Dependencies
+npm install
+
+# Setup Python Virtual Environment
+cd iris_core
+python -m venv venv
+.\venv\Scripts\activate
+pip install -r requirements.txt
+
+# Run the app
+npm run dev
 ```

@@ -152,7 +152,7 @@ app.whenReady().then(async () => {
   });
 
   // Register Ctrl+K global shortcut
-  const ret = globalShortcut.register('CommandOrControl+Shift+U', () => {
+  const ret = globalShortcut.register('CommandOrControl+K', () => {
     if (searchWindow) {
       if (searchWindow.isVisible()) {
         searchWindow.webContents.executeJavaScript(`window.dispatchEvent(new Event('electron-window-hidden'))`).catch(console.error);
