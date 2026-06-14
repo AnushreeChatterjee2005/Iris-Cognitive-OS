@@ -22,18 +22,6 @@ IRIS is an **Active Intelligence Layer** that sits natively between you and your
 
 It completely bypasses vendor APIs, allowing you to pipe data from any application on your screen to any other application using natural language and visual intent. 
 
-```mermaid
-graph TD
-    A[Source App<br/>(Visual/DOM/UI)] -->|Ctrl+K Overlay| I((IRIS<br/>Intelligence Layer))
-    I -->|Natural Language Intent| L[Local LLM / Vision]
-    L --> I
-    I -->|Synthetic OS Events| B[Target App<br/>(Form/Button)]
-
-    style I fill:#4A90E2,stroke:#fff,stroke-width:2px,color:#fff
-    style A fill:#1a1a1a,stroke:#888,color:#fff
-    style B fill:#1a1a1a,stroke:#888,color:#fff
-```
-
 - **Ambient Memory:** Silently builds a permanent timeline of your cross-app workflow.
 - **Spatial UI:** Trigger a global overlay, draw connecting boxes, and type your rule.
 - **Event-Driven:** Watches for visual triggers and fires background OS events autonomously.
