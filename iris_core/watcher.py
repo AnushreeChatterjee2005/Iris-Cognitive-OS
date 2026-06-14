@@ -390,7 +390,7 @@ Only include fields where you found a matching value.
                 import os
                 api_key = os.environ.get("VITE_GEMINI_API_KEY")
                 if not api_key:
-                    api_key = "AQ.Ab8RN6Ke91uERszH2DxbTXa8yN_JaWhCs33oBrQaTm2CLa84AA"
+                    raise ValueError("VITE_GEMINI_API_KEY environment variable is not set")
                 genai.configure(api_key=api_key)
                 model = genai.GenerativeModel('gemini-2.5-flash', generation_config={"response_mime_type": "application/json"})
                 
@@ -478,7 +478,7 @@ Example Output:
             import os
             api_key = os.environ.get("VITE_GEMINI_API_KEY")
             if not api_key:
-                api_key = "AQ.Ab8RN6Ke91uERszH2DxbTXa8yN_JaWhCs33oBrQaTm2CLa84AA" # Fallback to original key from older commits
+                raise ValueError("VITE_GEMINI_API_KEY environment variable is not set")
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-2.5-flash', generation_config={"response_mime_type": "application/json"})
             contents = [prompt]
