@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/logo.png" alt="IRIS Logo" width="250">
+  <img src="public/sidebar-logo.png" alt="IRIS Logo" width="250">
   
   # IRIS: The Intelligence Layer Between You and Your OS
   
@@ -69,18 +69,28 @@ IRIS ensures zero-ambiguity text and UI extraction by utilizing a 3-layer hybrid
 ## ⚙️ Quick Start
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/Hackathon_IRIS.git
+# 1. Clone the repository
+git clone https://github.com/AnushreeChatterjee2005/Iris-Cognitive-OS.git
+cd Iris-Cognitive-OS
 
-# Install Frontend Dependencies
+# 2. Install Frontend & Electron Dependencies
 npm install
 
-# Setup Python Virtual Environment
+# 3. Setup Python Virtual Environment (Core Engine)
 cd iris_core
 python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
 
-# Run the app
+# 4. Environment Variables
+# Create a .env file in the iris_core directory and add your API keys:
+# VITE_GEMINI_API_KEY=your_gemini_key
+# GROQ_API_KEY=your_groq_key
+
+# 5. Start the Python Backend (Terminal 1)
+uvicorn main:app --host 0.0.0.0 --port 8000
+
+# 6. Start the Electron App (Terminal 2)
+# Open a new terminal in the root directory
 npm run dev
 ```
