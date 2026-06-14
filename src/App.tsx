@@ -13,8 +13,35 @@ function SearchOverlay() {
   
   const [actionType, setActionType] = useState('when'); // now, when, always
   const [command, setCommand] = useState('');
+  const [animationKey, setAnimationKey] = useState(0);
   
   const inputRef = React.useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handleShown = () => {
+      setAnimationKey(prev => prev + 1);
+      setStatus('idle');
+      setSourceBox(null);
+      setTargetBox(null);
+      setCurrentBox(null);
+      setStartPos(null);
+      setCommand('');
+    };
+    const handleHidden = () => {
+      setStatus('idle');
+      setSourceBox(null);
+      setTargetBox(null);
+      setCurrentBox(null);
+      setStartPos(null);
+      setCommand('');
+    };
+    window.addEventListener('electron-window-shown', handleShown);
+    window.addEventListener('electron-window-hidden', handleHidden);
+    return () => {
+      window.removeEventListener('electron-window-shown', handleShown);
+      window.removeEventListener('electron-window-hidden', handleHidden);
+    };
+  }, []);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (status !== 'idle' && status !== 'drawing_target') return;
@@ -56,6 +83,9 @@ function SearchOverlay() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       setStatus('running');
+      if ((window as any).electronAPI) {
+        (window as any).electronAPI.setClickThrough(true);
+      }
       fetch('http://127.0.0.1:8000/api/watch-and-strike', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -70,15 +100,20 @@ function SearchOverlay() {
         setStatus('finished');
         setTimeout(() => {
           window.dispatchEvent(new Event('electron-window-hidden'));
-          setStatus('idle');
-          setSourceBox(null);
-          setTargetBox(null);
-          setCommand('');
+          if ((window as any).electronAPI) {
+            (window as any).electronAPI.hideWindow();
+            (window as any).electronAPI.setClickThrough(false);
+          }
         }, 2000);
       }).catch((err) => {
         console.error(err);
         setStatus('finished');
-        setTimeout(() => setStatus('idle'), 2000);
+        setTimeout(() => {
+          setStatus('idle');
+          if ((window as any).electronAPI) {
+            (window as any).electronAPI.setClickThrough(false);
+          }
+        }, 2000);
       });
     } else if (e.key === 'Escape') {
       if (status === 'typing') {
@@ -89,6 +124,9 @@ function SearchOverlay() {
         setSourceBox(null);
       } else {
         window.dispatchEvent(new Event('electron-window-hidden'));
+        if ((window as any).electronAPI) {
+          (window as any).electronAPI.hideWindow();
+        }
       }
     }
   };
@@ -128,7 +166,7 @@ function SearchOverlay() {
     <div className={`watch-overlay active`} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} style={{ width: '100vw', height: '100vh', position: 'fixed', top: 0, left: 0, overflow: 'hidden', cursor: status === 'idle' || status === 'drawing_target' ? 'crosshair' : 'default', background: 'transparent' }}>
       
       {status !== 'running' && (
-        <svg className="sweep-dim-bg" style={{ position: 'absolute', pointerEvents: 'none', zIndex: 5, width: '100%', height: '100%' }}>
+        <svg key={animationKey} className="sweep-dim-bg" style={{ position: 'absolute', pointerEvents: 'none', zIndex: 5, width: '100%', height: '100%' }}>
           <defs>
             <mask id="hole-mask">
               <rect width="100%" height="100%" fill="white" />
@@ -339,10 +377,18 @@ export default function App() {
   if (activeSession) {
     if (activeSession.urls) {
       const uniqueUrls = Array.from(new Set(activeSession.urls));
+      const seenPaths = new Set();
+      
       uniqueUrls.forEach((url: any) => {
         try {
           const u = new URL(url as string);
           const domain = u.hostname.replace('www.', '');
+          
+          // Deduplicate by domain + pathname to ignore hashes and query parameters for UI grouping
+          const pathKey = domain + u.pathname;
+          if (seenPaths.has(pathKey)) return;
+          seenPaths.add(pathKey);
+
           let group = trails.find(t => t.type === 'domain_group' && t.domain === domain);
           if (!group) {
             group = { type: 'domain_group', domain, nodes: [] };

@@ -157,7 +157,7 @@ import os
 from dotenv import load_dotenv
 
 # Load env variables from the root .env file
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'), override=True)
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 groq_client = Groq(api_key=GROQ_API_KEY)
@@ -314,44 +314,99 @@ Output ONLY a JSON object:
         if target_is_web and playwright_context:
             log_to_file(f"[{task_id}] Target is Web. Injecting via Playwright DOM...")
             try:
-                page = playwright_context.pages[0]
+                # Find the correct target page
+                target_page = None
+                for p in playwright_context.pages:
+                    try:
+                        if p.title() and p.title() in target_title:
+                            target_page = p
+                            break
+                    except Exception:
+                        pass
+                if not target_page: 
+                    target_page = playwright_context.pages[-1]
                 
-                # We ask Gemini to generate Playwright commands based on the intent!
+                # Also find the source page if it's web, to extract text accurately
+                if source_is_web and not extracted_text:
+                    for p in playwright_context.pages:
+                        try:
+                            if p.title() and p.title() in source_title:
+                                extracted_text = p.inner_text("body")
+                                break
+                        except Exception:
+                            pass
+
+                # Extract input fields from DOM
+                inputs_info = target_page.evaluate("""() => {
+                    const inputs = Array.from(document.querySelectorAll('input, textarea'));
+                    return inputs.map((el, index) => {
+                        let label = "";
+                        const prev = el.previousElementSibling;
+                        if (prev && prev.tagName === 'LABEL') label = prev.innerText;
+                        const parent = el.parentElement;
+                        if (!label && parent && parent.tagName === 'LABEL') label = parent.innerText.trim();
+                        if (!label) {
+                            const lbl = document.querySelector(`label[for="${el.id}"]`);
+                            if (lbl) label = lbl.innerText;
+                        }
+                        return { id: index, label: label, placeholder: el.placeholder || "" };
+                    });
+                }""")
+                
                 prompt = f'''
-You are an expert Web AI agent.
+You are an expert AI agent that fills out forms.
 User Intent: "{action_text}"
 
-The user wants to execute this intent on the active web page.
-Return ONLY a raw JSON array of objects representing Playwright actions.
-Format:
-[
-  {{"action": "fill", "placeholder": "To", "value": "email@gmail.com"}},
-  {{"action": "fill", "placeholder": "Subject", "value": "Hello"}},
-  {{"action": "fill_body", "value": "Body text"}},
-  {{"action": "click", "text": "Send"}}
-]
+The target web form has the following input fields:
+{json.dumps(inputs_info, indent=2)}
 
-If you just need to click a button by its text:
-[ {{"action": "click", "text": "Send"}} ]
-
-If you need to fill a specific field by placeholder:
-[ {{"action": "fill", "placeholder": "Search", "value": "query"}} ]
+You also have the Source Data provided as an image or text.
+Extract the relevant data from the Source Data and map it to the exact input fields based on their "label" or "placeholder".
+Return a JSON object containing an "actions" array:
+{{
+  "actions": [
+    {{"id": 0, "value": "extracted value"}},
+    {{"id": 1, "value": "extracted value"}}
+  ]
+}}
+Only include fields where you found a matching value.
 '''
-                resp = call_llm_with_retry('llama-3.3-70b-versatile', [prompt], task_id)
-                import json, re
-                json_match = re.search(r'\[.*\]', resp.text, re.DOTALL)
-                if json_match:
-                    actions = json.loads(json_match.group(0))
-                    for act in actions:
-                        if act["action"] == "click":
-                            page.get_by_text(act["text"]).first.click(timeout=3000)
-                        elif act["action"] == "fill":
-                            page.get_by_placeholder(act["placeholder"]).first.fill(act["value"])
-                        elif act["action"] == "fill_body":
-                            # For Gmail body, it's often an aria-label="Message Body"
-                            page.get_by_label("Message Body", exact=False).first.fill(act["value"])
-                    log_to_file(f"[{task_id}] Playwright Web Execution Successful!")
-                    return True
+                log_to_file(f"[{task_id}] Requesting precise DOM mapping from Gemini...")
+                
+                # Reuse the Gemini Flash setup from below
+                import google.generativeai as genai
+                import os
+                api_key = os.environ.get("VITE_GEMINI_API_KEY")
+                if not api_key:
+                    api_key = "AQ.Ab8RN6Ke91uERszH2DxbTXa8yN_JaWhCs33oBrQaTm2CLa84AA"
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel('gemini-2.5-flash', generation_config={"response_mime_type": "application/json"})
+                
+                contents = [prompt]
+                if s_crop_img is not None and s_crop_img.size > 0:
+                    from PIL import Image
+                    s_pil = Image.fromarray(cv2.cvtColor(s_crop_img, cv2.COLOR_BGR2RGB))
+                    contents.append(s_pil)
+                elif extracted_text:
+                    contents.append(f"Source Data Text: {extracted_text}")
+                
+                response = model.generate_content(contents)
+                parsed = json.loads(response.text)
+                actions = parsed.get("actions", [])
+                
+                for act in actions:
+                    if "id" in act:
+                        target_page.evaluate(f"""(act) => {{
+                            const inputs = Array.from(document.querySelectorAll('input, textarea'));
+                            if (inputs[act.id]) {{
+                                inputs[act.id].value = act.value;
+                                inputs[act.id].dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                inputs[act.id].dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            }}
+                        }}""", act)
+                
+                log_to_file(f"[{task_id}] Playwright Web Execution Successful! Filled {len(actions)} fields.")
+                return True
             except Exception as e:
                 log_to_file(f"[{task_id}] Playwright Execution Failed: {e}. Falling back to Vision.")
 
@@ -359,6 +414,7 @@ If you need to fill a specific field by placeholder:
         import cv2
         import pyautogui
         t_crop = None
+        t_text = ""
         try:
             t_img_np = capture_window(target_hwnd)
             if t_img_np is not None:
@@ -366,6 +422,11 @@ If you need to fill a specific field by placeholder:
                 t_rel_x, t_rel_y = target_bbox['x'] - t_orig_left, target_bbox['y'] - t_orig_top
                 t_win_h, t_win_w, _ = t_img_np.shape
                 t_crop = t_img_np[max(0, t_rel_y):min(t_win_h, t_rel_y + target_bbox['h']), max(0, t_rel_x):min(t_win_w, t_rel_x + target_bbox['w'])]
+                
+                # Run OCR on the FULL target window so we can see all fields
+                if t_img_np is not None and t_img_np.size > 0:
+                    t_results = global_reader.readtext(t_img_np, detail=0, workers=0)
+                    t_text = " ".join(t_results).strip()
         except Exception as e:
             pass
 
@@ -373,41 +434,87 @@ If you need to fill a specific field by placeholder:
 You are an expert AI agent executing a user's intent on a GUI.
 User Intent: "{action_text}"
 
-Determine what physical action to take on the Target Box to fulfill the user's intent.
-You MUST output ONLY a valid JSON object.
-If the intent requires typing data into fields, output a flat list:
-{{"action": "type", "values": ["string 1", "string 2"]}}
-If the intent is just to click a button, output:
-{{"action": "click"}}
+You have been provided with an image of the Target Form, the extracted text from the Target Form, and the Source Data.
+Target Form Text: "{t_text}"
+
+Your task is to extract the relevant data from the Source Data to fill out the Target Form.
+
+CRITICAL INSTRUCTION:
+The execution engine will click the FIRST input field in the Target Form, and then press the 'Tab' key to navigate linearly through EVERY single input field on the form (left-to-right, top-to-bottom).
+You MUST output a JSON object containing a "fields" array that corresponds to the EXACT sequence of input fields visible on the screen.
+- Carefully read the Target Form Text to identify all distinct field labels.
+- Do NOT merge fields! For example, if there is a "First Name" and "Last Name", they are two separate fields in the array.
+- For each input field you identify, create an object with "field_name" and "value".
+- Map the data from the Source Data to the corresponding field.
+- If a field asks for "Years of Experience" or similar, calculate it by summing the durations of the listed experiences. If it's less than a year, output "< 1 year" or "0". Do not leave it blank if experience exists.
+- If the Source Data is missing information for a specific field, you MUST still include the object but set "value" to an empty string "".
+
+Example Output:
+{{
+  "fields": [
+    {{"field_name": "First Name", "value": "John"}},
+    {{"field_name": "Last Name", "value": "Doe"}},
+    {{"field_name": "Email", "value": "john@test.com"}},
+    {{"field_name": "Phone Number", "value": ""}}
+  ]
+}}
 '''
         action_type = "type"
         values_to_type = []
         try:
+            import google.generativeai as genai
+            import os
+            api_key = os.environ.get("VITE_GEMINI_API_KEY")
+            if not api_key:
+                api_key = "AQ.Ab8RN6Ke91uERszH2DxbTXa8yN_JaWhCs33oBrQaTm2CLa84AA" # Fallback to original key from older commits
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-2.5-flash', generation_config={"response_mime_type": "application/json"})
             contents = [prompt]
             if s_crop_img is not None and s_crop_img.size > 0:
                 from PIL import Image
                 s_pil = Image.fromarray(cv2.cvtColor(s_crop_img, cv2.COLOR_BGR2RGB))
-                contents.extend(["Source Data Image:", s_pil])
+                contents.append(s_pil)
             elif extracted_text:
-                contents.extend([f"Source Data Text: {extracted_text}"])
+                contents.append(f"Source Data Text: {extracted_text}")
                 
-            if t_crop is not None and t_crop.size > 0:
+            if t_img_np is not None and t_img_np.size > 0:
                 from PIL import Image
-                t_pil = Image.fromarray(cv2.cvtColor(t_crop, cv2.COLOR_BGR2RGB))
-                contents.extend(["Target Form Image:", t_pil])
+                t_pil = Image.fromarray(cv2.cvtColor(t_img_np, cv2.COLOR_BGR2RGB))
+                contents.append(t_pil)
 
-            response = call_llm_with_retry('llama-3.2-90b-vision-preview', contents, task_id)
-            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group(0))
-                action_type = parsed.get("action", "type")
+            log_to_file(f"[{task_id}] Consulting Gemini 2.5 Flash API directly...")
+            response = model.generate_content(contents)
+            import json
+            parsed = json.loads(response.text)
+            if "fields" in parsed:
+                values_to_type = [str(f.get("value", "")) for f in parsed["fields"]]
+            else:
                 values_to_type = parsed.get("values", [])
-                if not isinstance(values_to_type, list): values_to_type = [values_to_type]
-                log_to_file(f"[{task_id}] Dynamic Action Decided: {action_type} | Values: {values_to_type}")
+            log_to_file(f"[{task_id}] Dynamic Action Decided: {action_type} | Values: {values_to_type}")
         except Exception as e:
             log_to_file(f"[{task_id}] Gemini Vision Action parsing failed: {e}")
-            active_watchers[task_id]["status"] = f"Error: API Limit"
-            return False
+            try:
+                log_to_file(f"[{task_id}] Falling back to Groq LLaMA 3.2 90B Vision...")
+                groq_prompt = prompt + "\n\nCRITICAL: You MUST output ONLY valid JSON format. Do not include markdown code blocks or explanations. Output pure JSON."
+                groq_contents = [groq_prompt]
+                if len(contents) > 1:
+                    groq_contents.extend(contents[1:])
+                resp = call_llm_with_retry('llama-3.2-11b-vision-preview', groq_contents, task_id)
+                import re
+                json_match = re.search(r'\{.*\}', resp.text, re.DOTALL)
+                if json_match:
+                    parsed = json.loads(json_match.group(0))
+                    if "fields" in parsed:
+                        values_to_type = [str(f.get("value", "")) for f in parsed["fields"]]
+                    else:
+                        values_to_type = parsed.get("values", [])
+                    log_to_file(f"[{task_id}] Groq Dynamic Action Decided: {action_type} | Values: {values_to_type}")
+                else:
+                    raise Exception("Groq did not return valid JSON")
+            except Exception as e2:
+                log_to_file(f"[{task_id}] Groq fallback also failed: {e2}")
+                active_watchers[task_id]["status"] = f"Error: API Limit"
+                return False
 
         final_tx, final_ty = tx, ty
         try:
@@ -426,42 +533,48 @@ If the intent is just to click a button, output:
 
         # Native Desktop Execution (Layer 2: UIAutomation)
         uia_success = False
-        try:
-            from pywinauto import Desktop
-            ctrl = Desktop(backend="uia").from_point(tx, ty)
-            if action_type == "click":
-                if hasattr(ctrl, 'invoke'):
-                    ctrl.invoke()
-                else:
-                    ctrl.click_input()
-                log_to_file(f"[{task_id}] UIA Native Execution Successful!")
-                uia_success = True
-            elif action_type == "type":
-                # UIA can set text without moving the mouse!
-                if hasattr(ctrl, 'set_edit_text'):
-                    ctrl.set_edit_text(str(values_to_type[0]))
-                else:
-                    ctrl.type_keys(str(values_to_type[0]), with_spaces=True)
-                log_to_file(f"[{task_id}] UIA Native Execution Successful!")
-                uia_success = True
-        except Exception as e:
-            log_to_file(f"[{task_id}] UIA Native Execution Failed: {e}. Falling back to Vision.")
+        if "Chrome" not in target_title and "Edge" not in target_title:
+            try:
+                from pywinauto import Desktop
+                ctrl = Desktop(backend="uia").from_point(tx, ty)
+                if action_type == "click":
+                    if hasattr(ctrl, 'invoke'):
+                        ctrl.invoke()
+                    else:
+                        ctrl.click_input()
+                    log_to_file(f"[{task_id}] UIA Native Execution Successful!")
+                    uia_success = True
+                elif action_type == "type":
+                    # UIA can set text without moving the mouse!
+                    if hasattr(ctrl, 'set_edit_text'):
+                        ctrl.set_edit_text(str(values_to_type[0]))
+                    else:
+                        ctrl.type_keys(str(values_to_type[0]), with_spaces=True)
+                    log_to_file(f"[{task_id}] UIA Native Execution Successful!")
+                    uia_success = True
+            except Exception as e:
+                log_to_file(f"[{task_id}] UIA Native Execution Failed: {e}. Falling back to Vision.")
 
         if not uia_success:
             # Layer 3: Vision Fallback (PyAutoGUI)
-            pyautogui.click(x=final_tx, y=final_ty)
-            time.sleep(0.5)
+            try:
+                pyautogui.click(x=final_tx, y=final_ty)
+                time.sleep(0.5)
 
-            if action_type == "type":
-                import pyperclip
-                for r_idx, val in enumerate(values_to_type):
-                    pyperclip.copy(str(val))
-                    time.sleep(0.05)
-                    pyautogui.hotkey('ctrl', 'v')
-                    time.sleep(0.1)
-                    if r_idx < len(values_to_type) - 1:
-                        pyautogui.press('tab')
-                        time.sleep(0.1)
+                if action_type == "type":
+                    for r_idx, val in enumerate(values_to_type):
+                        # Write directly using keyboard simulation (bypasses Windows clipboard race conditions)
+                        pyautogui.write(str(val), interval=0.01)
+                        if r_idx < len(values_to_type) - 1:
+                            time.sleep(0.1)
+                            pyautogui.press('tab')
+                            time.sleep(0.1)
+                log_to_file(f"[{task_id}] PyAutoGUI Execution Successful!")
+            except Exception as e:
+                log_to_file(f"[{task_id}] PyAutoGUI Execution Failed: {e}")
+                active_watchers[task_id]["status"] = f"Error: {e}"
+                return False
+                
         return True
 
     while active_watchers.get(task_id, {}).get("active", False):
@@ -502,9 +615,10 @@ If the intent is just to click a button, output:
                     if cropped_img.size > 0:
                         if mode == "now":
                             log_to_file(f"[{task_id}] Mode=Now. Triggering immediately.")
-                            execute_dynamic_action(cropped_img)
+                            success = execute_dynamic_action(cropped_img)
                             active_watchers[task_id]["active"] = False
-                            active_watchers[task_id]["status"] = "finished"
+                            if success:
+                                active_watchers[task_id]["status"] = "finished"
                             break
 
                         results = global_reader.readtext(cropped_img, detail=0, workers=0)
@@ -526,7 +640,7 @@ If the intent is just to click a button, output:
                             img_rgb = cv2.cvtColor(cropped_img, cv2.COLOR_BGR2RGB)
                             pil_img = Image.fromarray(img_rgb)
                             eval_prompt = f"Does this image meet the following condition: '{condition}'? Answer EXACTLY 'YES' or 'NO'."
-                            resp = call_llm_with_retry('llama-3.2-90b-vision-preview', [eval_prompt, pil_img], task_id)
+                            resp = call_llm_with_retry('llama-3.2-11b-vision-preview', [eval_prompt, pil_img], task_id)
                         else:
                             # Send text to Groq instead of Image (Zero Cost & Ultra Fast!)
                             eval_prompt = f"Does the following text state meet this condition: '{condition}'? Answer EXACTLY 'YES' or 'NO'.\n\nText State:\n{extracted_text_lower[:5000]}"
