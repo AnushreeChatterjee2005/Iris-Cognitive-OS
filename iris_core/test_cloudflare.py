@@ -17,7 +17,7 @@ Example output: ["Alexander Wright", "awright.dev@example.com", "Stanford Univer
 """
 
 API_BASE_URL = "https://api.cloudflare.com/client/v4/accounts/895f8c7b633eccf9438f9c233b93049b/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
-headers = {"Authorization": "Bearer cfut_2KqZpUwpIsNcHK4jkgrc7mH6PuKSaubdYhD2Rmad50d12dbc"}
+headers = {"Authorization": "Bearer YOUR_CLOUDFLARE_API_TOKEN"}
 inputs = {
     "max_tokens": 1000,
     "messages": [
