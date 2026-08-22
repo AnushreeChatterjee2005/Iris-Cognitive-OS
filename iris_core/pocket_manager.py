@@ -1,7 +1,16 @@
+import ctypes
 import win32gui
 import win32con
 import win32api
 import time
+
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 pocketed_sessions = {}
 

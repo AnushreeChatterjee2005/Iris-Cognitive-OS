@@ -230,20 +230,29 @@ def call_llm_with_retry(model_name, contents, task_id="system"):
     # 1. Fast Groq Priority for pure text contents (<200ms latency)
     is_pure_text = all(isinstance(x, str) for x in contents)
     if is_pure_text and groq_client is not None:
-        try:
-            prompt_str = " ".join([str(c) for c in contents])
-            chat_completion = groq_client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt_str}],
-                model="llama-3.3-70b-versatile",
-                temperature=0.1,
-                max_tokens=600,
-                timeout=4.0
-            )
-            resp_text = chat_completion.choices[0].message.content
-            if resp_text:
-                return GroqResponse(resp_text)
-        except Exception as ge:
-            log_to_file(f"[{task_id}] Groq fast-text note: {ge}")
+        prompt_str = " ".join([str(c) for c in contents])
+        for model_candidate in [
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "qwen/qwen3.6-27b",
+            "groq/compound",
+            "groq/compound-mini",
+            "llama-3.3-70b-versatile"
+        ]:
+            try:
+                chat_completion = groq_client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt_str}],
+                    model=model_candidate,
+                    temperature=0.1,
+                    max_tokens=800,
+                    timeout=5.0
+                )
+                resp_text = chat_completion.choices[0].message.content
+                if resp_text:
+                    resp_text = re.sub(r'<think>.*?</think>', '', resp_text, flags=re.DOTALL).strip()
+                    return GroqResponse(resp_text)
+            except Exception as ge:
+                continue
 
     # 2. Google Gemini Cloud Fallback
     raw_keys = os.environ.get("VITE_GEMINI_API_KEY", "")

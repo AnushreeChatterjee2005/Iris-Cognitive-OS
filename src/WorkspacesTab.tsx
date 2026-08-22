@@ -449,7 +449,22 @@ export function WorkspacesTab() {
         method: 'POST'
       });
       if (res.ok) {
-        showToast(`✓ ${ws.name} workspace restored to saved layout!`, 'success');
+        const data = await res.json();
+        const result = data?.result;
+        const restored = result?.appsRestored ?? 0;
+        const total = result?.appsTotal ?? ws.applications.length;
+        if (restored === 0) {
+          const appNames = ws.applications.map(a => a.name).join(' & ');
+          showToast(`⚠️ No open windows found for "${ws.name}". Please launch ${appNames} on your desktop first.`, 'error');
+        } else if (restored < total) {
+          const notFound = (result?.details || [])
+            .filter((d: any) => d.status === 'window_not_found')
+            .map((d: any) => d.name)
+            .join(', ');
+          showToast(`Arranged ${restored} of ${total} apps for "${ws.name}" (${notFound} was not running).`, 'info');
+        } else {
+          showToast(`✓ ${ws.name} layout restored (${restored}/${total} apps arranged)!`, 'success');
+        }
         fetchWorkspaces();
       } else {
         showToast(`Could not arrange all windows for ${ws.name}.`, 'error');
@@ -545,25 +560,21 @@ export function WorkspacesTab() {
       <div className="workspaces-header">
         <div>
           <div className="ws-title-row">
-            <div className="ws-header-badge">
-              <Sparkles size={12} color="#00E5FF" />
-              <span>METASPACE</span>
-            </div>
+            <h1 className="workspaces-main-title">Workspaces</h1>
           </div>
-          <h1 className="workspaces-main-title">Workspaces & App Arrangements</h1>
           <p className="workspaces-subtitle">
-            Create, launch, and restore custom multi-app desktop environments with snap window layouts.
+            Instantly launch and restore multi-app window arrangements.
           </p>
         </div>
 
         <div className="ws-header-actions">
           <button className="ws-btn secondary" onClick={handleCaptureCurrentDesktop} title="Capture open windows on your desktop">
             <Camera size={14} />
-            <span>Capture Desktop</span>
+            <span>Capture</span>
           </button>
           <button className="ws-btn primary" onClick={() => { setEditingWorkspace(null); setIsEditorOpen(true); }}>
             <Plus size={15} />
-            <span>Create Workspace</span>
+            <span>New Workspace</span>
           </button>
         </div>
       </div>
@@ -572,24 +583,17 @@ export function WorkspacesTab() {
       {startupWorkspace && (
         <div className="ws-startup-banner">
           <div className="ws-startup-left">
-            <div className="ws-startup-glow-icon">
-              <Power size={15} color="#00E5FF" />
-            </div>
-            <div>
-              <div className="ws-startup-title">
-                Default Startup Environment: <strong>{startupWorkspace.name}</strong>
-              </div>
-              <div className="ws-startup-sub">
-                This layout opens and snaps automatically whenever you start your laptop.
-              </div>
-            </div>
+            <div className="ws-startup-dot" />
+            <span className="ws-startup-title">
+              Default Startup: <strong>{startupWorkspace.name}</strong>
+            </span>
           </div>
           <button
             className="ws-startup-disable-btn"
             onClick={() => handleToggleStartup(startupWorkspace)}
             title="Disable automatic startup for this workspace"
           >
-            Disable Startup
+            Disable
           </button>
         </div>
       )}
@@ -601,7 +605,7 @@ export function WorkspacesTab() {
           <input
             type="text"
             className="ws-search-input"
-            placeholder="Search workspaces or apps (e.g. Chrome, VS Code)..."
+            placeholder="Search workspaces or apps..."
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
           />
@@ -617,14 +621,16 @@ export function WorkspacesTab() {
             className={`ws-filter-pill ${!filterStartupOnly ? 'active' : ''}`}
             onClick={() => setFilterStartupOnly(false)}
           >
-            All Workspaces ({workspaces.length})
+            All ({workspaces.length})
           </button>
-          <button
-            className={`ws-filter-pill ${filterStartupOnly ? 'active' : ''}`}
-            onClick={() => setFilterStartupOnly(true)}
-          >
-            ⚡ Startup Only ({workspaces.filter(w => w.startupEnabled).length})
-          </button>
+          {workspaces.some(w => w.startupEnabled) && (
+            <button
+              className={`ws-filter-pill ${filterStartupOnly ? 'active' : ''}`}
+              onClick={() => setFilterStartupOnly(true)}
+            >
+              ⚡ Startup ({workspaces.filter(w => w.startupEnabled).length})
+            </button>
+          )}
         </div>
       </div>
 
@@ -666,7 +672,14 @@ export function WorkspacesTab() {
                       {renderIconComponent(ws.icon, 16, ws.color || '#00E5FF')}
                     </div>
                     <div>
-                      <div className="ws-card-name">{ws.name}</div>
+                      <div className="ws-card-title-container">
+                        <span className="ws-card-name">{ws.name}</span>
+                        {ws.startupEnabled && (
+                          <span className="ws-card-startup-badge" title="Opens automatically on system startup">
+                            ⚡ Startup
+                          </span>
+                        )}
+                      </div>
                       <div className="ws-card-meta-line">
                         <span>{ws.applications.length} {ws.applications.length === 1 ? 'App' : 'Apps'}</span>
                         <span>•</span>
@@ -738,7 +751,7 @@ export function WorkspacesTab() {
                 </div>
 
                 {/* Minimalist Multi-Color Layout Thumbnail */}
-                <div className="ws-card-preview-stage" onClick={() => handleOpenWorkspace(ws)}>
+                <div className="ws-card-preview-stage" onClick={() => handleOpenWorkspace(ws)} title="Click to launch workspace">
                   <LayoutThumbnail applications={ws.applications} />
                 </div>
 
@@ -752,8 +765,8 @@ export function WorkspacesTab() {
                   {ws.applications.map((app, i) => {
                     const theme = getAppTheme(app.name || app.appIdentifier);
                     return (
-                      <div key={app.id || i} className="ws-app-chip" style={{ borderColor: `${theme.color}40`, backgroundColor: `${theme.color}10` }}>
-                        <AppFavicon name={app.name || app.appIdentifier} size={13} />
+                      <div key={app.id || i} className="ws-app-chip" style={{ borderColor: `${theme.color}35`, backgroundColor: `${theme.color}10` }}>
+                        <AppFavicon name={app.name || app.appIdentifier} size={12} />
                         <span style={{ color: '#E2E8F0' }}>{app.name}</span>
                       </div>
                     );
@@ -774,7 +787,7 @@ export function WorkspacesTab() {
                       </>
                     ) : (
                       <>
-                        <Play size={13} fill="currentColor" />
+                        <Play size={12} fill="currentColor" />
                         <span>Launch Workspace</span>
                       </>
                     )}
@@ -788,7 +801,7 @@ export function WorkspacesTab() {
                     }}
                     title="Edit layout coordinates"
                   >
-                    <Sliders size={14} />
+                    <Sliders size={13} />
                   </button>
                 </div>
               </div>
@@ -807,24 +820,31 @@ export function WorkspacesTab() {
             setEditingWorkspace(null);
           }}
           onSave={async (savedWs) => {
-            if (editingWorkspace && editingWorkspace.id && !editingWorkspace.id.startsWith('ws-captured-')) {
-              await fetch(`http://127.0.0.1:8000/api/workspaces/${editingWorkspace.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(savedWs)
-              });
-              showToast(`Workspace "${savedWs.name}" updated!`, 'success');
-            } else {
-              await fetch('http://127.0.0.1:8000/api/workspaces', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(savedWs)
-              });
-              showToast(`Workspace "${savedWs.name}" created successfully!`, 'success');
+            try {
+              if (editingWorkspace && editingWorkspace.id && !editingWorkspace.id.startsWith('ws-captured-')) {
+                const res = await fetch(`http://127.0.0.1:8000/api/workspaces/${editingWorkspace.id}`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(savedWs)
+                });
+                if (!res.ok) throw new Error('Failed to update');
+                showToast(`Workspace "${savedWs.name}" updated!`, 'success');
+              } else {
+                const res = await fetch('http://127.0.0.1:8000/api/workspaces', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(savedWs)
+                });
+                if (!res.ok) throw new Error('Failed to create');
+                showToast(`Workspace "${savedWs.name}" created successfully!`, 'success');
+              }
+              setIsEditorOpen(false);
+              setEditingWorkspace(null);
+              fetchWorkspaces();
+            } catch (err: any) {
+              console.error('Workspace save error:', err);
+              showToast('Could not save workspace. Backend service may be restarting.', 'error');
             }
-            setIsEditorOpen(false);
-            setEditingWorkspace(null);
-            fetchWorkspaces();
           }}
         />
       )}
@@ -859,7 +879,7 @@ export function WorkspacesTab() {
 // Visual Layout Thumbnail Component (Multi-Color App Specific Boxes)
 // -----------------------------------------------------------------------------
 
-function LayoutThumbnail({ applications }: { applications: WorkspaceApp[] }) {
+const LayoutThumbnail = React.memo(function LayoutThumbnail({ applications }: { applications: WorkspaceApp[] }) {
   if (!applications || applications.length === 0) {
     return (
       <div className="ws-thumb-empty">
@@ -887,18 +907,16 @@ function LayoutThumbnail({ applications }: { applications: WorkspaceApp[] }) {
                 top: topPct,
                 width: widthPct,
                 height: heightPct,
-                borderColor: theme.border,
-                backgroundColor: theme.bg
+                borderColor: `${theme.color}60`,
+                backgroundColor: `${theme.color}15`
               }}
             >
-              <div className="ws-thumb-titlebar" style={{ backgroundColor: `${theme.color}25` }}>
+              <div className="ws-thumb-titlebar" style={{ backgroundColor: `${theme.color}30` }}>
                 <AppFavicon name={app.name || app.appIdentifier} size={11} />
-                <span className="ws-thumb-window-name" style={{ color: '#FFFFFF' }}>{app.name}</span>
+                <span className="ws-thumb-window-name">{app.name}</span>
               </div>
               <div className="ws-thumb-window-body">
-                <span className="ws-thumb-badge" style={{ color: `${theme.color}` }}>
-                  {Math.round(app.width * 100)}% × {Math.round(app.height * 100)}%
-                </span>
+                <div className="ws-thumb-window-accent-line" style={{ backgroundColor: `${theme.color}40` }} />
               </div>
             </div>
           );
@@ -906,7 +924,7 @@ function LayoutThumbnail({ applications }: { applications: WorkspaceApp[] }) {
       </div>
     </div>
   );
-}
+});
 
 // -----------------------------------------------------------------------------
 // MINIMALIST ZERO-LAG DRAG-TO-SNAP WORKSPACE BUILDER MODAL
@@ -932,8 +950,13 @@ function InteractiveDragSnapEditorModal({ initialWorkspace, availableApps, onClo
   const [selectedApps, setSelectedApps] = useState<WorkspaceApp[]>(initialWorkspace?.applications || []);
   
   const [activeTab, setActiveTab] = useState<'canvas' | 'details'>('canvas');
+  const runningList = availableApps.running || [];
+  const installedList = availableApps.installed || [];
+
   const [appSearch, setAppSearch] = useState('');
-  const [appSourceTab, setAppSourceTab] = useState<'popular' | 'running' | 'installed'>('popular');
+  const [appSourceTab, setAppSourceTab] = useState<'popular' | 'running' | 'installed'>(
+    runningList.length > 0 ? 'running' : 'popular'
+  );
   const [isSaving, setIsSaving] = useState(false);
 
   // Performance-optimized Drag Refs
@@ -942,9 +965,6 @@ function InteractiveDragSnapEditorModal({ initialWorkspace, availableApps, onClo
   const currentZoneRef = useRef<SnapZone>(null);
   const [activeSnapZone, setActiveSnapZone] = useState<SnapZone>(null);
   const [draggingApp, setDraggingApp] = useState<any>(null);
-
-  const runningList = availableApps.running || [];
-  const installedList = availableApps.installed || [];
 
   const displayedApps = useMemo(() => {
     const q = appSearch.toLowerCase();
@@ -1034,13 +1054,20 @@ function InteractiveDragSnapEditorModal({ initialWorkspace, availableApps, onClo
     });
   };
 
-  // 60FPS Zero-Lag Pointer Drag Listener (Zero React Re-render Overhead)
+  const canvasRectRef = useRef<DOMRect | null>(null);
+  const rafRef = useRef<number | null>(null);
+
+  // 144FPS Hardware-Accelerated Pointer Drag Listener (Zero Reflow Overhead)
   useEffect(() => {
     if (!draggingApp) return;
 
+    if (canvasRef.current) {
+      canvasRectRef.current = canvasRef.current.getBoundingClientRect();
+    }
+
     const computeZone = (clientX: number, clientY: number): SnapZone => {
-      if (!canvasRef.current) return null;
-      const rect = canvasRef.current.getBoundingClientRect();
+      const rect = canvasRectRef.current;
+      if (!rect) return null;
       if (
         clientX < rect.left ||
         clientX > rect.right ||
@@ -1064,20 +1091,34 @@ function InteractiveDragSnapEditorModal({ initialWorkspace, availableApps, onClo
       return 'center';
     };
 
-    const handlePointerMove = (e: PointerEvent) => {
-      // Direct DOM update for zero lag
-      if (ghostRef.current) {
-        ghostRef.current.style.transform = `translate3d(${e.clientX + 14}px, ${e.clientY + 14}px, 0)`;
-      }
+    let latestX = 0;
+    let latestY = 0;
 
-      const zone = computeZone(e.clientX, e.clientY);
+    const updateGhostPosition = () => {
+      if (ghostRef.current) {
+        ghostRef.current.style.transform = `translate3d(${latestX + 14}px, ${latestY + 14}px, 0)`;
+      }
+      const zone = computeZone(latestX, latestY);
       if (zone !== currentZoneRef.current) {
         currentZoneRef.current = zone;
         setActiveSnapZone(zone);
       }
+      rafRef.current = null;
+    };
+
+    const handlePointerMove = (e: PointerEvent) => {
+      latestX = e.clientX;
+      latestY = e.clientY;
+      if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(updateGhostPosition);
+      }
     };
 
     const handlePointerUp = (e: PointerEvent) => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       const zone = computeZone(e.clientX, e.clientY);
       if (draggingApp && zone) {
         snapAppToZone(draggingApp, zone);
@@ -1086,11 +1127,16 @@ function InteractiveDragSnapEditorModal({ initialWorkspace, availableApps, onClo
       setDraggingApp(null);
       currentZoneRef.current = null;
       setActiveSnapZone(null);
+      canvasRectRef.current = null;
     };
 
     window.addEventListener('pointermove', handlePointerMove, { passive: true });
     window.addEventListener('pointerup', handlePointerUp);
     return () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
     };
@@ -1104,6 +1150,9 @@ function InteractiveDragSnapEditorModal({ initialWorkspace, availableApps, onClo
     if (preset === '50_50' && count >= 2) {
       apps[0] = { ...apps[0], x: 0.0, y: 0.0, width: 0.5, height: 1.0 };
       apps[1] = { ...apps[1], x: 0.5, y: 0.0, width: 0.5, height: 1.0 };
+    } else if (preset === 'top_bottom' && count >= 2) {
+      apps[0] = { ...apps[0], x: 0.0, y: 0.0, width: 1.0, height: 0.5 };
+      apps[1] = { ...apps[1], x: 0.0, y: 0.5, width: 1.0, height: 0.5 };
     } else if (preset === '60_40' && count >= 2) {
       apps[0] = { ...apps[0], x: 0.0, y: 0.0, width: 0.6, height: 1.0 };
       apps[1] = { ...apps[1], x: 0.6, y: 0.0, width: 0.4, height: 1.0 };
@@ -1132,11 +1181,11 @@ function InteractiveDragSnapEditorModal({ initialWorkspace, availableApps, onClo
   };
 
   const handleSave = async () => {
-    if (!name.trim()) return;
+    const finalName = name.trim() || (isEditing ? initialWorkspace?.name : 'My Workspace') || 'My Workspace';
     setIsSaving(true);
     try {
       await onSave({
-        name: name.trim(),
+        name: finalName,
         description: description.trim(),
         icon,
         color,
@@ -1186,7 +1235,16 @@ function InteractiveDragSnapEditorModal({ initialWorkspace, availableApps, onClo
               {renderIconComponent(icon, 16, color)}
             </div>
             <div>
-              <div className="ws-editor-title">{isEditing ? `Edit: ${name}` : 'Create Workspace'}</div>
+              <div className="ws-editor-title-row">
+                <input
+                  type="text"
+                  className="ws-inline-modal-name"
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  placeholder="Workspace Name (e.g. My Workspace)"
+                  title="Click to rename workspace"
+                />
+              </div>
               <div className="ws-editor-sub">Drag apps onto the canvas or click to snap into your custom arrangement.</div>
             </div>
           </div>
@@ -1302,6 +1360,7 @@ function InteractiveDragSnapEditorModal({ initialWorkspace, availableApps, onClo
                   <span className="ws-presets-label">Layout:</span>
                   <button className="ws-min-preset-btn" onClick={() => applyPreset('50_50')}>◫ 50/50</button>
                   <button className="ws-min-preset-btn" onClick={() => applyPreset('60_40')}>◧ 60/40 Dev</button>
+                  <button className="ws-min-preset-btn" onClick={() => applyPreset('top_bottom')}>⬒ Top/Bottom</button>
                   <button className="ws-min-preset-btn" onClick={() => applyPreset('master_stack')}>☵ Master + 2</button>
                   <button className="ws-min-preset-btn" onClick={() => applyPreset('columns')}>||| 3 Cols</button>
                   <button className="ws-min-preset-btn" onClick={() => applyPreset('grid')}>⊞ 2×2 Grid</button>
@@ -1501,7 +1560,7 @@ function InteractiveDragSnapEditorModal({ initialWorkspace, availableApps, onClo
             <button className="ws-btn secondary" onClick={onClose}>
               Cancel
             </button>
-            <button className="ws-btn primary" onClick={handleSave} disabled={isSaving || !name.trim()}>
+            <button className="ws-btn primary" onClick={handleSave} disabled={isSaving}>
               {isSaving ? 'Saving Workspace...' : isEditing ? 'Save Changes' : 'Save Workspace'}
             </button>
           </div>

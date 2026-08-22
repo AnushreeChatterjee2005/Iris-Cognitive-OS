@@ -12,8 +12,17 @@ import ctypes
 from ctypes import wintypes
 from typing import List, Dict, Any, Optional
 
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2) # Per-Monitor V2 DPI awareness
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 # Setup Win32 User32 CTypes API Signatures for 64-bit robustness
 user32 = ctypes.windll.user32
+dwmapi = ctypes.windll.dwmapi
 user32.OpenDesktopW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
 user32.OpenDesktopW.restype = wintypes.HDESK
 user32.SetThreadDesktop.argtypes = [wintypes.HDESK]
@@ -39,7 +48,9 @@ def ensure_interactive_desktop():
     and has COM initialized, allowing background worker threads to access UIA and HWNDs.
     """
     try:
-        hdesk = user32.OpenDesktopW('Default', 0, False, 0x10000000)
+        hdesk = user32.OpenInputDesktop(0, False, 0x10000000)
+        if not hdesk:
+            hdesk = user32.OpenDesktopW('Default', 0, False, 0x10000000)
         if hdesk:
             user32.SetThreadDesktop(hdesk)
     except Exception:
@@ -60,13 +71,12 @@ import win32process
 import psutil
 import pyperclip
 import pyautogui
+import concurrent.futures
 pyautogui.FAILSAFE = False
 
-def get_all_desktop_windows() -> List[Dict[str, Any]]:
-    """
-    Safely and reliably enumerates all interactive top-level desktop application windows.
-    Bypasses pywin32 EnumWindows buffer limitations by using Win32 FindWindowEx.
-    """
+_desktop_enum_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="desktop_enum")
+
+def _enum_desktop_windows_internal() -> List[Dict[str, Any]]:
     ensure_interactive_desktop()
 
     cur = 0
@@ -93,11 +103,28 @@ def get_all_desktop_windows() -> List[Dict[str, Any]]:
         # Filter out OS desktop infrastructure and invisible background hosts
         if cls in ['Progman', 'Shell_TrayWnd', 'NotifyIconOverflowWindow', 'Windows.UI.Core.CoreWindow', 'WorkerW']:
             continue
+        if cls == 'ApplicationFrameWindow' and not title:
+            continue
+
+        # Check DWM Cloaked state (cloaked = 1/2/4 means invisible/suspended/other virtual desktop)
+        try:
+            cloaked = ctypes.c_int(0)
+            dwmapi.DwmGetWindowAttribute(cur, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked)) # DWMWA_CLOAKED = 14
+            if cloaked.value != 0:
+                continue
+        except Exception:
+            pass
+
+        is_min = bool(user32.IsIconic(cur))
+        is_max = bool(user32.IsZoomed(cur))
 
         rect = win32gui.GetWindowRect(cur)
         w = rect[2] - rect[0]
         h = rect[3] - rect[1]
-        if w < 100 or h < 100:
+
+        # Minimized windows on Windows report temporary rects like (-32000, -32000, 160, 30).
+        # Only apply minimum dimension filters to non-minimized windows.
+        if not is_min and (w < 100 or h < 100):
             continue
 
         pid = ctypes.c_ulong()
@@ -116,9 +143,6 @@ def get_all_desktop_windows() -> List[Dict[str, Any]]:
         if pname in ['electron.exe', 'iris.exe'] and (title.lower() in ['hackathon-iris', 'iris'] or not title):
             continue
 
-        is_min = bool(user32.IsIconic(cur))
-        is_max = bool(user32.IsZoomed(cur))
-
         windows.append({
             'hwnd': cur,
             'title': title,
@@ -131,6 +155,17 @@ def get_all_desktop_windows() -> List[Dict[str, Any]]:
             'is_max': is_max
         })
     return windows
+
+def get_all_desktop_windows() -> List[Dict[str, Any]]:
+    """
+    Safely and reliably enumerates all interactive top-level desktop application windows.
+    Executes in a dedicated clean desktop worker thread to isolate from async event loop thread desktop bindings.
+    """
+    try:
+        future = _desktop_enum_pool.submit(_enum_desktop_windows_internal)
+        return future.result(timeout=2.0)
+    except Exception as e:
+        return _enum_desktop_windows_internal()
 
 KNOWN_APP_PROCESSES = {
     "vscode": ["code.exe", "antigravity.exe", "antigravity ide.exe", "vscodium.exe"],
@@ -235,6 +270,58 @@ def bring_window_to_front(hwnd: int) -> bool:
             return True
         except Exception:
             return False
+
+def position_and_size_window(hwnd: int, x: int, y: int, width: int, height: int, state: str = "normal") -> bool:
+    """
+    Precision window positioning and sizing engine.
+    - Synchronously restores iconic / maximized windows to normal state.
+    - Applies two-pass SetWindowPos with settling delay to defeat asynchronous
+      Chromium/Electron/VS Code window geometry re-computation.
+    - Handles explicit maximized state if requested.
+    - Forces non-client frame and client area redraws.
+    """
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        return False
+
+    ensure_interactive_desktop()
+    try:
+        # 1. Un-minimize / un-maximize if needed to unlock manual coordinate sizing
+        if user32.IsZoomed(hwnd) or user32.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            for _ in range(25):
+                if not user32.IsZoomed(hwnd) and not user32.IsIconic(hwnd):
+                    break
+                time.sleep(0.01)
+
+        # 2. Position & Size (Pass 1)
+        flags = (
+            win32con.SWP_NOZORDER |
+            win32con.SWP_FRAMECHANGED |
+            win32con.SWP_SHOWWINDOW |
+            win32con.SWP_NOCOPYBITS |
+            win32con.SWP_NOACTIVATE
+        )
+        win32gui.SetWindowPos(hwnd, 0, x, y, width, height, flags)
+        time.sleep(0.04)
+
+        # 3. Pass 2: Re-apply to lock dimensions against asynchronous Chromium/Electron WM_SIZE handlers
+        win32gui.SetWindowPos(hwnd, 0, x, y, width, height, flags)
+
+        # 4. Handle explicit maximized state if requested
+        if state == "maximized":
+            win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+
+        # 5. Force frame and client redraw
+        win32gui.RedrawWindow(
+            hwnd,
+            None,
+            0,
+            win32con.RDW_FRAME | win32con.RDW_INVALIDATE | win32con.RDW_UPDATENOW | win32con.RDW_ALLCHILDREN
+        )
+        return True
+    except Exception as e:
+        print(f"[Win32] position_and_size_window error for HWND {hwnd}: {e}")
+        return False
 
 APP_REGISTRY = {
     "spotify": {
@@ -401,14 +488,22 @@ APP_REGISTRY = {
     "chrome": {
         "aliases": ["chrome", "google chrome"],
         "window_keywords": ["chrome"],
-        "exec_commands": ["start chrome"],
+        "exec_commands": [
+            r'start "" "C:\Program Files\Google\Chrome\Application\chrome.exe"',
+            r'start "" "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"',
+            "start chrome"
+        ],
         "web_url": "https://www.google.com",
         "tab_keywords": []
     },
     "edge": {
         "aliases": ["edge", "microsoft edge"],
         "window_keywords": ["edge"],
-        "exec_commands": ["start msedge"],
+        "exec_commands": [
+            r'start "" "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"',
+            r'start "" "C:\Program Files\Microsoft\Edge\Application\msedge.exe"',
+            "start msedge"
+        ],
         "web_url": "https://www.bing.com",
         "tab_keywords": []
     },

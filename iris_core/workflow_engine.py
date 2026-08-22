@@ -64,7 +64,15 @@ Return ONLY a JSON array of step objects, no markdown formatting, no explanation
   {{"step": 1, "action": "open", "target": "vscode", "description": "Opening Visual Studio Code"}},
   {{"step": 2, "action": "open", "target": "spotify", "description": "Opening Spotify"}}
 ]"""
-            for model_name in ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "gemma2-9b-it"]:
+            for model_name in [
+                "openai/gpt-oss-120b",
+                "openai/gpt-oss-20b",
+                "qwen/qwen3.6-27b",
+                "groq/compound",
+                "groq/compound-mini",
+                "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant"
+            ]:
                 try:
                     chat_completion = client.chat.completions.create(
                         messages=[
@@ -74,9 +82,10 @@ Return ONLY a JSON array of step objects, no markdown formatting, no explanation
                         model=model_name,
                         temperature=0.0,
                         max_tokens=600,
-                        timeout=3.0
+                        timeout=4.0
                     )
                     raw_text = chat_completion.choices[0].message.content.strip()
+                    raw_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL).strip()
                     # Extract JSON array
                     json_match = re.search(r'\[\s*\{.*\}\s*\]', raw_text, re.DOTALL)
                     if json_match:
@@ -326,15 +335,28 @@ Include:
 4. Production Best Practices & Documentation References
 
 Output plain readable text ready for Notepad (no markdown code fence blocks)."""
-            resp = client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile",
-                temperature=0.2,
-                max_tokens=800
-            )
-            content = resp.choices[0].message.content.strip()
-            if len(content) > 100:
-                return content
+            for model_name in [
+                "openai/gpt-oss-120b",
+                "openai/gpt-oss-20b",
+                "qwen/qwen3.6-27b",
+                "groq/compound",
+                "groq/compound-mini",
+                "llama-3.3-70b-versatile"
+            ]:
+                try:
+                    resp = client.chat.completions.create(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=model_name,
+                        temperature=0.2,
+                        max_tokens=800,
+                        timeout=5.0
+                    )
+                    content = resp.choices[0].message.content.strip()
+                    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+                    if len(content) > 100:
+                        return content
+                except Exception:
+                    continue
     except Exception as e:
         print(f"[Summary] Fast synthesis note: {e}")
 

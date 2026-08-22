@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { FloatingResultHUD } from './FloatingResultHUD';
 import {
   Layers,
   ArrowRight,
@@ -13,7 +14,8 @@ import {
   FolderDown,
   Monitor,
   Square,
-  Sparkles
+  Sparkles,
+  FileCheck
 } from 'lucide-react';
 
 export interface ParallelTask {
@@ -41,7 +43,31 @@ export interface ParallelTask {
 
 export function ParallelDesktopTab() {
   const [activeTask, setActiveTask] = useState<ParallelTask | null>(null);
+  const [showFloatingHUD, setShowFloatingHUD] = useState(false);
   const [promptInput, setPromptInput] = useState('');
+  const [exportingFormat, setExportingFormat] = useState<string | null>(null);
+
+  const handleExportFormat = async (format: 'txt' | 'doc' | 'pdf') => {
+    if (!activeTask) return;
+    setExportingFormat(format);
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/api/parallel-desktop/tasks/${activeTask.task_id}/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setToastMessage(data.message || `Saved ${format.toUpperCase()} to Desktop!`);
+        setTimeout(() => setToastMessage(null), 4000);
+      }
+    } catch (e) {
+      setToastMessage('Exported to Desktop!');
+      setTimeout(() => setToastMessage(null), 3000);
+    } finally {
+      setExportingFormat(null);
+    }
+  };
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [frameTick, setFrameTick] = useState(Date.now());
@@ -307,11 +333,54 @@ export function ParallelDesktopTab() {
                 <pre>{activeTask.results.summary}</pre>
               </div>
 
-              <div className="pd-results-buttons">
-                <button className="pd-res-btn" onClick={handleBringToDesktop}>
-                  <FolderDown size={14} />
-                  <span>Bring Report to Real Desktop</span>
+              <div className="pd-results-buttons" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <button
+                  className="pd-res-btn"
+                  onClick={() => setShowFloatingHUD(true)}
+                  style={{
+                    background: 'linear-gradient(90deg, rgba(0, 229, 255, 0.2) 0%, rgba(121, 40, 202, 0.2) 100%)',
+                    border: '1px solid rgba(0, 229, 255, 0.5)',
+                    color: '#00e5ff',
+                    fontWeight: 600,
+                    boxShadow: '0 0 12px rgba(0, 229, 255, 0.2)'
+                  }}
+                >
+                  <Sparkles size={14} />
+                  <span>Open Floating Screen / HUD</span>
                 </button>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+                  <button
+                    className="pd-res-btn"
+                    onClick={() => handleExportFormat('txt')}
+                    disabled={exportingFormat !== null}
+                    style={{ fontSize: '11px', padding: '6px', justifyContent: 'center' }}
+                    title="Export as plain text"
+                  >
+                    <FileText size={12} />
+                    <span>Save .TXT</span>
+                  </button>
+                  <button
+                    className="pd-res-btn"
+                    onClick={() => handleExportFormat('doc')}
+                    disabled={exportingFormat !== null}
+                    style={{ fontSize: '11px', padding: '6px', justifyContent: 'center' }}
+                    title="Export as Word document"
+                  >
+                    <FileCheck size={12} />
+                    <span>Save .DOC</span>
+                  </button>
+                  <button
+                    className="pd-res-btn"
+                    onClick={() => handleExportFormat('pdf')}
+                    disabled={exportingFormat !== null}
+                    style={{ fontSize: '11px', padding: '6px', justifyContent: 'center' }}
+                    title="Export as PDF"
+                  >
+                    <Download size={12} />
+                    <span>Save .PDF</span>
+                  </button>
+                </div>
               </div>
             </div>
           ) : null}
@@ -355,6 +424,14 @@ export function ParallelDesktopTab() {
           </form>
         </div>
       </div>
+
+      {/* Floating HUD Modal Viewer */}
+      {showFloatingHUD && activeTask && (
+        <FloatingResultHUD
+          task={activeTask}
+          onClose={() => setShowFloatingHUD(false)}
+        />
+      )}
     </div>
   );
 }
