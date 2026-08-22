@@ -83,21 +83,26 @@ export class ResumeEngine {
       counts: { tabs: relevantUrls.length, workspaces: topWorkspaces.length + topApps.length }
     });
 
-    // Wait for cinematic darkening and UI to show up
-    await new Promise(r => setTimeout(r, 800));
+    // Snappy transition delay for UI entrance
+    await new Promise(r => setTimeout(r, 450));
 
     // STEP 2: Primary Context Opens
     if (topWorkspaces.length > 0 || topApps.length > 0) {
       const primaryApp = dominantApps.find(a => a && ['code', 'cursor', 'antigravity', 'vscode'].some(ide => a.toLowerCase().includes(ide)));
       
-      bus.emit('resume-sequence', { type: 'progress', message: `Restoring ${topWorkspaces.length + topApps.length} app(s)/workspace(s)`, item: 'vscode' });
+      bus.emit('resume-sequence', { 
+        type: 'progress', 
+        message: `Restoring ${topWorkspaces.length + topApps.length} app(s)/workspace(s)`, 
+        item: 'vscode',
+        icon: '💻'
+      });
       for (const path of topWorkspaces) {
         this.openWorkspaceOrApp(path, primaryApp); // Fire and forget so we don't lag the UI
       }
       for (const app of topApps) {
         this.openWorkspaceOrApp(app, primaryApp);
       }
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise(r => setTimeout(r, 400));
     }
 
     // STEP 3: Supporting Research Opens
@@ -105,30 +110,35 @@ export class ResumeEngine {
       bus.emit('resume-sequence', { 
         type: 'progress', 
         message: `Reopening ${relevantUrls.length} research tab${relevantUrls.length > 1 ? 's' : ''}`, 
-        item: 'chrome' 
+        item: 'chrome',
+        icon: '🌐'
       });
       
       for (const url of relevantUrls) {
         try {
           console.log(`[ResumeEngine] Opening tab: ${url}`);
-          await shell.openExternal(url);
+          shell.openExternal(url).catch(e => {
+            try { exec(`start "" "${url}"`); } catch (err) {}
+          });
         } catch (e) {
-          console.error(`[ResumeEngine] Error opening URL with shell.openExternal: ${url}`, e);
-          try {
-            exec(`start "" "${url}"`);
-          } catch (err) {}
+          try { exec(`start "" "${url}"`); } catch (err) {}
         }
-        await new Promise(r => setTimeout(r, 250));
+        await new Promise(r => setTimeout(r, 120));
       }
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise(r => setTimeout(r, 350));
     }
 
     // STEP 4: Terminal Context Restores
     const likelyWorkingDir = this.inferWorkingDirectory(files, dominantApps);
     if (likelyWorkingDir) {
-      bus.emit('resume-sequence', { type: 'progress', message: `Restoring shell context in ${likelyWorkingDir.split('\\').pop()}`, item: 'terminal' });
+      bus.emit('resume-sequence', { 
+        type: 'progress', 
+        message: `Restoring shell context in ${likelyWorkingDir.split('\\').pop()}`, 
+        item: 'terminal',
+        icon: '⚡'
+      });
       console.log(`[ResumeEngine] Preparing to restore shell context in: ${likelyWorkingDir}`);
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise(r => setTimeout(r, 350));
     }
 
     // STEP 5: IRIS Context Summary Appears & Overlay Dissolves

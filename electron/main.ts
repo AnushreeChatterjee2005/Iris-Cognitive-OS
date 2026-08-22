@@ -254,7 +254,7 @@ app.whenReady().then(async () => {
           if (overlayWindow && !overlayWindow.isDestroyed()) {
             overlayWindow.hide();
           }
-        }, 4000);
+        }, 2800);
       }
     }
   });
