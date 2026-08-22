@@ -29,13 +29,28 @@ export class ResumeEngine {
     const dominantApps = session.dominantApps || [];
     const windowTitles = session.windowTitles || [];
 
-    // Context Prioritization: Filter out generic/noise URLs and files
-    const relevantUrls = urls.filter(url => 
-      url &&
-      !url.includes('google.com/search') && 
-      !url.includes('newtab') && 
-      !url.includes('chrome://')
-    ); 
+    // Context Prioritization: Filter out internal/empty browser pages, ensure protocols
+    const isInternalBrowserPage = (u: string) => {
+      const lower = u.toLowerCase().trim();
+      return lower.startsWith('chrome://') || 
+             lower.startsWith('edge://') || 
+             lower.startsWith('about:') || 
+             lower.startsWith('chrome-extension://') || 
+             lower.startsWith('brave://') ||
+             lower === 'newtab' ||
+             lower === 'about:blank' ||
+             lower === 'about:newtab';
+    };
+
+    const relevantUrls = Array.from(new Set(urls))
+      .filter(u => u && typeof u === 'string' && u.trim().length > 0 && !isInternalBrowserPage(u))
+      .map(u => {
+        let clean = u.trim();
+        if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+          clean = 'https://' + clean;
+        }
+        return clean;
+      });
 
     const relevantFiles = files.filter(f => f && !f.includes('node_modules') && !f.includes('.git'));
     const workspaces = new Set<string>();
@@ -87,10 +102,23 @@ export class ResumeEngine {
 
     // STEP 3: Supporting Research Opens
     if (relevantUrls.length > 0) {
-      bus.emit('resume-sequence', { type: 'progress', message: `Reopening ${relevantUrls.length} research tabs`, item: 'chrome' });
+      bus.emit('resume-sequence', { 
+        type: 'progress', 
+        message: `Reopening ${relevantUrls.length} research tab${relevantUrls.length > 1 ? 's' : ''}`, 
+        item: 'chrome' 
+      });
+      
       for (const url of relevantUrls) {
-        shell.openExternal(url);
-        await new Promise(r => setTimeout(r, 200));
+        try {
+          console.log(`[ResumeEngine] Opening tab: ${url}`);
+          await shell.openExternal(url);
+        } catch (e) {
+          console.error(`[ResumeEngine] Error opening URL with shell.openExternal: ${url}`, e);
+          try {
+            exec(`start "" "${url}"`);
+          } catch (err) {}
+        }
+        await new Promise(r => setTimeout(r, 250));
       }
       await new Promise(r => setTimeout(r, 400));
     }

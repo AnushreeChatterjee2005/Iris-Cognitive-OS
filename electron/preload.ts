@@ -13,4 +13,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onActivityEvent: (callback: (activity: any) => void) => ipcRenderer.on('activity-event', (event, activity) => callback(activity)),
   searchMemory: (query: string) => ipcRenderer.invoke('search-memory', query),
   resumeWorkflow: (session: any) => ipcRenderer.invoke('resume-workflow', session),
+  toggleDashboard: (coords?: {x: number, y: number}) => ipcRenderer.send('toggle-dashboard', coords),
+  onBlobSnapped: (callback: (side: 'left' | 'right' | 'none') => void) => ipcRenderer.on('blob-snapped', (event, side) => callback(side)),
+  onDashboardOpening: (callback: (coords?: {x: number, y: number}) => void) => ipcRenderer.on('dashboard-opening', (event, coords) => callback(coords)),
+  onDashboardClosed: (callback: () => void) => ipcRenderer.on('dashboard-closed', () => callback()),
+  closeDashboard: () => ipcRenderer.send('close-dashboard'),
+  readyToShowDashboard: () => ipcRenderer.send('ready-to-show-dashboard'),
+  enableBlobFocus: () => ipcRenderer.send('enable-blob-focus'),
+  disableBlobFocus: () => ipcRenderer.send('disable-blob-focus'),
 });

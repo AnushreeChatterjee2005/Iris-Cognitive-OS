@@ -65,20 +65,22 @@ cd Iris-Cognitive-OS
 npm install
 
 # 3. Setup Python Virtual Environment (Core Engine)
-cd iris_core
 python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
 
 # 4. Environment Variables
-# Create a .env file in the iris_core directory and add your API keys:
+# Create a .env file in the root directory and add your API keys:
 # VITE_GEMINI_API_KEY=your_gemini_key
 # GROQ_API_KEY=your_groq_key
 
-# 5. Start the Python Backend (Terminal 1)
-uvicorn main:app --host 0.0.0.0 --port 8000
+# 5. Start the Application
 
-# 6. Start the Electron App (Terminal 2)
-# Open a new terminal in the root directory
-npm run dev
+> [!WARNING]
+> **Important Note on Starting the App:**
+> If you run `npm start`, it will automatically launch **both** the frontend and the Python backend in the background. **Do not run the python command manually if you use `npm start`! It is already running!**
+
+If you want to see the Python logs clearly in their own terminal (which is highly recommended for debugging):
+1. **Terminal 1 (Frontend):** Run `npm run dev`
+2. **Terminal 2 (Backend):** Run `cd iris_core` then `python -m uvicorn main:app`
 ```

@@ -1154,3 +1154,127 @@ body {
     opacity: 0.7;
 }
 
+/* IRIS Bubbles UI */
+.iris-bubbles-container {
+  position: absolute;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.iris-bubble-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.iris-bubble {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(10, 10, 10, 0.9);
+  border: 1px solid rgba(6, 182, 212, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 15px rgba(6, 182, 212, 0.3);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  z-index: 10;
+}
+
+.iris-bubble:hover {
+  transform: scale(1.1);
+  border-color: rgba(6, 182, 212, 1);
+}
+
+.iris-bubble-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(6, 182, 212, 1);
+  animation: pulse 2s infinite;
+}
+
+.iris-bubble-text {
+  position: absolute;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  background: #0a0a0c;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 6px 12px;
+  white-space: nowrap;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Invisible hover bridge to prevent gap drop-off */
+.iris-bubble-text::before {
+  content: '';
+  position: absolute;
+  top: -20px;
+  bottom: -20px;
+  left: -20px;
+  right: -20px;
+  z-index: -1;
+}
+
+.iris-bubble-wrapper:hover .iris-bubble-text {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.iris-bubble-title {
+  font-size: 10px;
+  font-weight: bold;
+  color: rgba(6, 182, 212, 1);
+  letter-spacing: 1px;
+  margin-bottom: 2px;
+}
+
+.iris-bubble-cond {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.9);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Sound Wave Effects for Waked State */
+.state-Waked .sound-wave {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid rgba(34, 211, 238, 0.8);
+  opacity: 0;
+  animation: sound-wave-ripple 1.5s linear infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.state-Waked .sound-wave:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.state-Waked .sound-wave:nth-child(2) {
+  animation-delay: 0.5s;
+}
+
+.state-Waked .sound-wave:nth-child(3) {
+  animation-delay: 1s;
+}
+
+@keyframes sound-wave-ripple {
+  0% {
+    width: 80px;
+    height: 80px;
+    opacity: 0.8;
+  }
+  100% {
+    width: 350px;
+    height: 350px;
+    opacity: 0;
+  }
+}

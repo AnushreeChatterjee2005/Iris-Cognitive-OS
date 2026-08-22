@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IRIS Execution Mode Test Suite</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            margin: 0;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            gap: 40px;
+        }
+        .test-card {
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            max-width: 800px;
+        }
+        h2 { margin-top: 0; color: #3498db; }
+        .instructions { color: #aaaaaa; margin-bottom: 20px; font-style: italic; }
+        
+        /* Test 1 Styles */
+        .status-box {
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 24px;
+            font-weight: bold;
+            text-align: center;
+            background-color: #27ae60;
+            color: white;
+            transition: all 0.3s;
+            margin-bottom: 20px;
+        }
+        .status-box.alert { background-color: #e74c3c; animation: pulse 1s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+        
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        button:hover { background-color: #2980b9; }
+
+        /* Test 2 Styles */
+        .health-bar-container {
+            width: 100%;
+            background-color: #333;
+            border-radius: 10px;
+            height: 30px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+        .health-bar {
+            height: 100%;
+            background-color: #2ecc71;
+            width: 100%;
+            transition: width 0.5s ease-in-out, background-color 0.5s ease;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>IRIS Execution Mode Test Suite</h1>
+
+    <!-- TEST 1: WHEN MODE -->
+    <div class="test-card" id="test1">
+        <h2>Test 1: Conditional Automation ("WHEN" Mode)</h2>
+        <p class="instructions">Voice Command to test: "Hey IRIS, when the server status turns red, click the Acknowledge button."</p>
+        
+        <div id="serverStatus" class="status-box">SYSTEM NORMAL</div>
+        <button id="ackBtn" onclick="acknowledgeAlert()">Acknowledge Alert</button>
+        <br><br>
+        <button style="background-color: #555;" onclick="triggerAlertIn5()">Simulate Server Crash (In 5 seconds)</button>
+    </div>
+
+    <!-- TEST 2: ALWAYS MODE -->
+    <div class="test-card" id="test2">
+        <h2>Test 2: Continuous Looping ("ALWAYS" Mode)</h2>
+        <p class="instructions">Voice Command to test: "Hey IRIS, always keep the reactor health full by clicking the Recharge button whenever it drops."</p>
+        
+        <div class="health-bar-container">
+            <div id="healthBar" class="health-bar"></div>
+        </div>
+        <button id="rechargeBtn" onclick="rechargeHealth()">Recharge Reactor</button>
+    </div>
+
+    <script>
+        // --- Test 1 Logic ---
+        let alertActive = false;
+        function triggerAlertIn5() {
+            const statusBox = document.getElementById('serverStatus');
+            statusBox.innerText = "WAITING...";
+            statusBox.style.backgroundColor = "#f39c12";
+            statusBox.classList.remove('alert');
+            
+            setTimeout(() => {
+                statusBox.style.backgroundColor = ""; // Clear inline style
+                statusBox.innerText = "🚨 P1 SERVER CRASH 🚨";
+                statusBox.classList.add('alert');
+                alertActive = true;
+            }, 5000);
+        }
+
+        function acknowledgeAlert() {
+            if (alertActive) {
+                const statusBox = document.getElementById('serverStatus');
+                statusBox.innerText = "SYSTEM NORMAL";
+                statusBox.classList.remove('alert');
+                statusBox.style.backgroundColor = "#27ae60";
+                alertActive = false;
+            }
+        }
+
+        // --- Test 2 Logic ---
+        let health = 100;
+        const healthBar = document.getElementById('healthBar');
+
+        function updateHealthVisuals() {
+            healthBar.style.width = health + '%';
+            if (health > 60) healthBar.style.backgroundColor = '#2ecc71';
+            else if (health > 30) healthBar.style.backgroundColor = '#f39c12';
+            else healthBar.style.backgroundColor = '#e74c3c';
+        }
+
+        function drainHealth() {
+            if (health > 0) {
+                health -= Math.floor(Math.random() * 5) + 2; // drain 2-7% randomly
+                if (health < 0) health = 0;
+                updateHealthVisuals();
+            }
+        }
+
+        function rechargeHealth() {
+            health = 100;
+            updateHealthVisuals();
+        }
+
+        // Start health drain loop
+        setInterval(drainHealth, 1000);
+
+    </script>
+</body>
+</html>

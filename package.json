@@ -5,6 +5,9 @@
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
+    "start": "concurrently \"npm run ollama\" \"npm run backend\" \"npm run dev\"",
+    "ollama": "ollama serve || exit 0",
+    "backend": "cd iris_core && \"C:\\Users\\Anushree Chatterjee\\AppData\\Local\\Programs\\Python\\Python313\\python.exe\" -m uvicorn main:app --host 127.0.0.1 --port 8000",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",

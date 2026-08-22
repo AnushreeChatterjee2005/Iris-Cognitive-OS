@@ -4,12 +4,15 @@ import { fileURLToPath } from 'url';
 import { ActivityEngine } from './engine/ActivityEngine';
 import { ActivityStore } from './store/ActivityStore';
 import { EventBus } from './engine/EventBus';
+import { IntentParser } from './ai/intentParser';
+import { exec } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let dashboardWindow: BrowserWindow | null = null;
 let searchWindow: BrowserWindow | null = null;
 let overlayWindow: BrowserWindow | null = null;
+let blobWindow: BrowserWindow | null = null;
 let ignoreBlur = false;
 let hasPipelines = false;
 let engine: ActivityEngine | null = null;
@@ -19,9 +22,18 @@ let store: ActivityStore | null = null;
 app.disableHardwareAcceleration();
 
 function createDashboardWindow() {
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+
   dashboardWindow = new BrowserWindow({
-    width: 1000,
-    height: 700,
+    width,
+    height,
+    x: 0,
+    y: 0,
+    show: true,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       nodeIntegration: false,
@@ -29,14 +41,79 @@ function createDashboardWindow() {
     },
   });
 
+  // Keep dashboard as a normal 'always-on-top' window
+  dashboardWindow.setAlwaysOnTop(true, 'floating');
+
   if (!app.isPackaged) {
     dashboardWindow.loadURL('http://localhost:5173/#/');
   } else {
     dashboardWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/' });
   }
 
+  // Dashboard is initially closed, so it must ignore all mouse events
+  dashboardWindow.setIgnoreMouseEvents(true, { forward: true });
+
+  // Close dashboard when window loses focus (e.g. clicking Windows Start menu, taskbar, or another app)
+  dashboardWindow.on('blur', () => {
+    if (isDashboardOpen) {
+      isDashboardOpen = false;
+      dashboardWindow?.setIgnoreMouseEvents(true, { forward: true });
+      dashboardWindow?.webContents.send('dashboard-closed');
+    }
+  });
+
+  // Close dashboard when pressing Escape key
+  dashboardWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') {
+      if (isDashboardOpen) {
+        isDashboardOpen = false;
+        dashboardWindow?.setIgnoreMouseEvents(true, { forward: true });
+        dashboardWindow?.webContents.send('dashboard-closed');
+        event.preventDefault();
+      }
+    }
+  });
+
   dashboardWindow.on('closed', () => {
     dashboardWindow = null;
+  });
+}
+
+function createBlobWindow() {
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  
+  blobWindow = new BrowserWindow({
+    width,
+    height,
+    x: 0,
+    y: 0,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: true,
+    focusable: false,
+    movable: false,
+    resizable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.mjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+
+  // Elevate the blob to the absolute highest interactive Z-order level so it's NEVER covered by the dashboard
+  blobWindow.setAlwaysOnTop(true, 'pop-up-menu');
+  blobWindow.setIgnoreMouseEvents(true, { forward: true });
+
+  if (!app.isPackaged) {
+    blobWindow.loadURL('http://localhost:5173/#/blob');
+  } else {
+    blobWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/blob' });
+  }
+
+  blobWindow.on('closed', () => {
+    blobWindow = null;
   });
 }
 
@@ -102,15 +179,37 @@ function createSearchWindow() {
     setTimeout(() => { searchWindow?.hide(); }, 50);
   });
 
+  searchWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') {
+      searchWindow?.webContents.executeJavaScript(`window.dispatchEvent(new Event('electron-window-hidden'))`).catch(console.error);
+      searchWindow?.hide();
+      event.preventDefault();
+    }
+  });
+
   searchWindow.on('closed', () => {
     searchWindow = null;
   });
 }
 
 app.whenReady().then(async () => {
+  const { session } = require('electron');
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (permission === 'media') {
+      callback(true);
+    } else {
+      callback(false);
+    }
+  });
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    if (permission === 'media') return true;
+    return false;
+  });
+
   createDashboardWindow();
   createSearchWindow();
   createOverlayWindow();
+  createBlobWindow();
 
   try {
     store = new ActivityStore(app.getPath('userData'));
@@ -118,6 +217,15 @@ app.whenReady().then(async () => {
     
     engine = new ActivityEngine(store);
     await engine.start();
+
+    // Trigger designated startup workspace layout if configured
+    setTimeout(async () => {
+      try {
+        await fetch('http://127.0.0.1:8000/api/workspaces/startup/trigger', { method: 'POST' });
+      } catch (e) {
+        // Backend still initializing or no startup workspace
+      }
+    }, 2500);
   } catch (e) {
     console.error("[IRIS] Engine failed to start fully:", e);
   }
@@ -199,13 +307,57 @@ ipcMain.on('hide-window', () => {
   }
 });
 
+let isDashboardOpen = false;
+
+ipcMain.on('toggle-dashboard', (event, coords) => {
+  if (dashboardWindow) {
+    if (isDashboardOpen) {
+      isDashboardOpen = false;
+      dashboardWindow.setIgnoreMouseEvents(true, { forward: true });
+      dashboardWindow.webContents.send('dashboard-closed');
+      // If we need to release focus, we can just blur it, but CSS pointer-events: none handles clicks
+    } else {
+      isDashboardOpen = true;
+      dashboardWindow.setIgnoreMouseEvents(false);
+      dashboardWindow.webContents.send('dashboard-opening', coords);
+      dashboardWindow.focus();
+    }
+  }
+});
+
+ipcMain.on('close-dashboard', () => {
+  if (dashboardWindow && isDashboardOpen) {
+    isDashboardOpen = false;
+    dashboardWindow.setIgnoreMouseEvents(true, { forward: true });
+    dashboardWindow.webContents.send('dashboard-closed');
+  }
+});
+
+// Removed ready-to-show-dashboard listener since it was redundantly calling focus() and causing OS stutter
+
 ipcMain.on('set-has-pipelines', (event, val) => {
   hasPipelines = val;
 });
 
 ipcMain.on('set-click-through', (event, ignore) => {
-  if (searchWindow) {
-    searchWindow.setIgnoreMouseEvents(ignore, { forward: true });
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win) {
+    win.setIgnoreMouseEvents(ignore, { forward: true });
+  }
+});
+
+ipcMain.on('enable-blob-focus', () => {
+  if (blobWindow) {
+    blobWindow.setFocusable(true);
+    blobWindow.setIgnoreMouseEvents(false);
+    blobWindow.focus();
+  }
+});
+
+ipcMain.on('disable-blob-focus', () => {
+  if (blobWindow) {
+    blobWindow.setFocusable(false);
+    blobWindow.setIgnoreMouseEvents(true, { forward: true });
   }
 });
 
