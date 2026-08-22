@@ -18,6 +18,14 @@ import win32api
 import win32process
 import win32_engine
 
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 class SYSTEM_POWER_STATUS(ctypes.Structure):
     _fields_ = [
         ('ACLineStatus', wintypes.BYTE),
@@ -159,6 +167,19 @@ class MetaOS:
                               win32con.SWP_SHOWWINDOW | win32con.SWP_FRAMECHANGED)
         return True
 
+    def _get_work_area(self) -> dict:
+        """Returns primary display workArea metrics (excluding taskbar)."""
+        try:
+            from workspace_manager import workspace_engine
+            monitors = workspace_engine.get_monitors()
+            if monitors:
+                return monitors[0]["workArea"]
+        except Exception:
+            pass
+        sw = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+        sh = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+        return {"x": 0, "y": 0, "width": sw, "height": max(100, sh - 48)}
+
     def spotlight_window(self, target_app: str = None):
         """Centers primary app in 78% spotlight and minimizes other distracting windows."""
         primary = self.resolve_app_hwnd(target_app, auto_launch=False) if target_app else None
@@ -169,11 +190,12 @@ class MetaOS:
         if not primary:
             return False
 
-        sw = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-        sh = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+        wa = self._get_work_area()
+        sw = wa["width"]
+        sh = wa["height"]
         spot_w, spot_h = int(sw * 0.78), int(sh * 0.88)
-        x = (sw - spot_w) // 2
-        y = (sh - spot_h) // 2
+        x = wa["x"] + (sw - spot_w) // 2
+        y = wa["y"] + (sh - spot_h) // 2
 
         # Minimize other background windows
         for h in hwnds:
@@ -181,9 +203,8 @@ class MetaOS:
                 win32gui.ShowWindow(h, win32con.SW_MINIMIZE)
 
         self._save_original_style(primary)
-        win32gui.ShowWindow(primary, win32con.SW_RESTORE)
-        win32gui.SetWindowPos(primary, win32con.HWND_TOP, x, y, spot_w, spot_h, 
-                              win32con.SWP_SHOWWINDOW | win32con.SWP_FRAMECHANGED)
+        win32_engine.position_and_size_window(primary, x, y, spot_w, spot_h)
+        win32_engine.bring_window_to_front(primary)
         return True
 
     def split_2_windows(self, hwnd1: int, hwnd2: int, ratio: float = 0.5):
@@ -191,21 +212,16 @@ class MetaOS:
         if not hwnd1 or not hwnd2:
             return False
 
-        sw = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-        sh = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+        wa = self._get_work_area()
+        sw = wa["width"]
+        sh = wa["height"]
 
         w1 = int(sw * ratio)
         w2 = sw - w1
 
-        for idx, (h, x, w) in enumerate([(hwnd1, 0, w1), (hwnd2, w1, w2)]):
+        for idx, (h, x, w) in enumerate([(hwnd1, wa["x"], w1), (hwnd2, wa["x"] + w1, w2)]):
             self._save_original_style(h)
-            win32gui.ShowWindow(h, win32con.SW_RESTORE)
-            win32gui.SetWindowPos(h, win32con.HWND_TOP, x, 0, w, sh, 
-                                  win32con.SWP_SHOWWINDOW | win32con.SWP_FRAMECHANGED)
-            win32gui.RedrawWindow(h, None, None, 
-                                  win32con.RDW_INVALIDATE | win32con.RDW_ERASE | 
-                                  win32con.RDW_ALLCHILDREN | win32con.RDW_UPDATENOW | 
-                                  win32con.RDW_FRAME)
+            win32_engine.position_and_size_window(h, x, wa["y"], w, sh)
             win32_engine.bring_window_to_front(h)
         return True
 
@@ -218,15 +234,16 @@ class MetaOS:
         if not hwnd1 or not hwnd2 or not hwnd3:
             return False
 
-        sw = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-        sh = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+        wa = self._get_work_area()
+        sw = wa["width"]
+        sh = wa["height"]
 
         if layout == "columns":
             w = sw // 3
             placements = [
-                (hwnd1, 0, 0, w, sh),
-                (hwnd2, w, 0, w, sh),
-                (hwnd3, w * 2, 0, sw - (w * 2), sh)
+                (hwnd1, wa["x"], wa["y"], w, sh),
+                (hwnd2, wa["x"] + w, wa["y"], w, sh),
+                (hwnd3, wa["x"] + (w * 2), wa["y"], sw - (w * 2), sh)
             ]
         else:
             # master_stack (Left master 55%, Right stack 45%)
@@ -234,42 +251,36 @@ class MetaOS:
             w_right = sw - w_left
             h_half = sh // 2
             placements = [
-                (hwnd1, 0, 0, w_left, sh),
-                (hwnd2, w_left, 0, w_right, h_half),
-                (hwnd3, w_left, h_half, w_right, sh - h_half)
+                (hwnd1, wa["x"], wa["y"], w_left, sh),
+                (hwnd2, wa["x"] + w_left, wa["y"], w_right, h_half),
+                (hwnd3, wa["x"] + w_left, wa["y"] + h_half, w_right, sh - h_half)
             ]
 
         for h, x, y, w, height in placements:
             self._save_original_style(h)
-            win32gui.ShowWindow(h, win32con.SW_RESTORE)
-            win32gui.SetWindowPos(h, win32con.HWND_TOP, x, y, w, height, 
-                                  win32con.SWP_SHOWWINDOW | win32con.SWP_FRAMECHANGED)
-            win32gui.RedrawWindow(h, None, None, 
-                                  win32con.RDW_INVALIDATE | win32con.RDW_ERASE | 
-                                  win32con.RDW_ALLCHILDREN | win32con.RDW_UPDATENOW | 
-                                  win32con.RDW_FRAME)
+            win32_engine.position_and_size_window(h, x, y, w, height)
             win32_engine.bring_window_to_front(h)
         return True
 
     def split_4_windows(self, hwnd1: int, hwnd2: int, hwnd3: int, hwnd4: int):
         """Snaps 4 windows into 2x2 quadrants."""
-        sw = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-        sh = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+        wa = self._get_work_area()
+        sw = wa["width"]
+        sh = wa["height"]
         half_w = sw // 2
         half_h = sh // 2
 
         placements = [
-            (hwnd1, 0, 0, half_w, half_h),
-            (hwnd2, half_w, 0, sw - half_w, half_h),
-            (hwnd3, 0, half_h, half_w, sh - half_h),
-            (hwnd4, half_w, half_h, sw - half_w, sh - half_h)
+            (hwnd1, wa["x"], wa["y"], half_w, half_h),
+            (hwnd2, wa["x"] + half_w, wa["y"], sw - half_w, half_h),
+            (hwnd3, wa["x"], wa["y"] + half_h, half_w, sh - half_h),
+            (hwnd4, wa["x"] + half_w, wa["y"] + half_h, sw - half_w, sh - half_h)
         ]
         for h, x, y, w, height in placements:
             if h:
                 self._save_original_style(h)
-                win32gui.ShowWindow(h, win32con.SW_RESTORE)
-                win32gui.SetWindowPos(h, win32con.HWND_TOP, x, y, w, height, 
-                                      win32con.SWP_SHOWWINDOW | win32con.SWP_FRAMECHANGED)
+                win32_engine.position_and_size_window(h, x, y, w, height)
+                win32_engine.bring_window_to_front(h)
         return True
 
     def tile_windows(self):
@@ -279,8 +290,9 @@ class MetaOS:
             return False
 
         num = len(hwnds)
-        sw = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-        sh = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+        wa = self._get_work_area()
+        sw = wa["width"]
+        sh = wa["height"]
         
         cols = 2 if num in [2, 4] else (3 if num >= 3 else 1)
         rows = (num + cols - 1) // cols
@@ -292,11 +304,10 @@ class MetaOS:
             self._save_original_style(hwnd)
             r = idx // cols
             c = idx % cols
-            x = c * win_w
-            y = r * win_h
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-            win32gui.SetWindowPos(hwnd, win32con.HWND_TOP, x, y, win_w, win_h, 
-                                  win32con.SWP_SHOWWINDOW | win32con.SWP_FRAMECHANGED)
+            x = wa["x"] + (c * win_w)
+            y = wa["y"] + (r * win_h)
+            win32_engine.position_and_size_window(hwnd, x, y, win_w, win_h)
+            win32_engine.bring_window_to_front(hwnd)
         return True
 
     def restore_all(self):

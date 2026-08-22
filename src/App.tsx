@@ -4,6 +4,7 @@ import { CanvasGrid } from './CanvasGrid';
 import { TimelineAgent } from './ai/timelineAgent';
 import { WorkspacesTab } from './WorkspacesTab';
 import { ParallelDesktopTab } from './ParallelDesktopTab';
+import { FloatingResultHUD } from './FloatingResultHUD';
 import { Globe, Mic, Brain, Zap, CheckCircle2, Square, MessageSquare, Send, X, LayoutGrid, Layers } from 'lucide-react';
 
 function SearchOverlay() {
@@ -245,6 +246,24 @@ function SearchOverlay() {
   );
 }
 
+function playPopSound() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(300, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(600, ctx.currentTime + 0.1);
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.1);
+  } catch(e) {}
+}
+
 function BlobOverlay() {
   const BLOB_RADIUS = 20; // Smaller size
   const [pos, setPos] = useState({ x: window.innerWidth - BLOB_RADIUS, y: window.innerHeight / 2 });
@@ -269,6 +288,66 @@ function BlobOverlay() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatInputText, setChatInputText] = useState('');
   const chatInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  // Floating Result HUD (Auto popup on task completion)
+  const [floatingDossier, setFloatingDossier] = useState<any>(null);
+  const seenDossierIdsRef = React.useRef<Set<string>>(new Set());
+  const initialLoadRef = React.useRef(true);
+
+  // Auto-detect completed parallel/research tasks and display immediately on user's screen
+  useEffect(() => {
+    const checkParallelCompletion = async () => {
+      try {
+        const resp = await fetch('http://127.0.0.1:8000/api/parallel-desktop/status');
+        if (resp.ok) {
+          const data = await resp.json();
+          const task = data.active_task;
+          if (task && task.status === 'completed' && task.results?.summary) {
+            // On initial app mount, mark already completed past task as seen so it doesn't pop up old historical tasks
+            if (initialLoadRef.current) {
+              initialLoadRef.current = false;
+              seenDossierIdsRef.current.add(task.task_id);
+              return;
+            }
+
+            if (!seenDossierIdsRef.current.has(task.task_id)) {
+              seenDossierIdsRef.current.add(task.task_id);
+              setFloatingDossier(task);
+              playPopSound();
+              if ((window as any).electronAPI) {
+                (window as any).electronAPI.enableBlobFocus?.();
+                (window as any).electronAPI.setClickThrough?.(false);
+              }
+            }
+          } else {
+            initialLoadRef.current = false;
+          }
+        }
+      } catch (e) {}
+    };
+
+    checkParallelCompletion();
+    const interval = setInterval(checkParallelCompletion, 1200);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (floatingDossier) {
+      setIsChatOpen(false);
+      if ((window as any).electronAPI) {
+        (window as any).electronAPI.enableBlobFocus?.();
+        (window as any).electronAPI.setClickThrough?.(false);
+      }
+    }
+  }, [floatingDossier]);
+
+  const handleCloseDossier = () => {
+    setFloatingDossier(null);
+    if ((window as any).electronAPI) {
+      (window as any).electronAPI.disableBlobFocus?.();
+      (window as any).electronAPI.setClickThrough?.(true);
+    }
+  };
 
   const toggleChatBox = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -310,7 +389,7 @@ function BlobOverlay() {
     let stripped = c;
     for (const p of [
       'can you please ', 'could you please ', 'can you ', 'could you ', 'please ', 'iris, ', 'iris ',
-      'i want you to ', 'help me ', 'would you mind ', 'go ahead and '
+      'i want you to ', 'help me ', 'would you mind ', 'go ahead and ', 'tell me ', 'give me '
     ]) {
       if (stripped.startsWith(p)) {
         stripped = stripped.slice(p.length).trim();
@@ -318,22 +397,7 @@ function BlobOverlay() {
     }
     const clean = stripped.replace(/[^\w\s]/gi, '').trim();
 
-    // 1. Comprehensive Action Verbs & Keywords - if ANY is present, it is NEVER conversational
-    const actionKeywords = [
-      'open', 'launch', 'start', 'search', 'find', 'google', 'look up', 'play',
-      'extract', 'write', 'type', 'copy', 'paste', 'download', 'delete', 'run',
-      'send', 'calculate', 'summarize', 'scrape', 'convert', 'save', 'fill',
-      'inject', 'close', 'exit', 'quit', 'kill', 'click', 'press', 'select',
-      'tap', 'hit', 'switch', 'navigate', 'go to', 'focus', 'create', 'make',
-      'arrange', 'tile', 'split', 'maximize', 'minimize', 'restore', 'mute',
-      'restart', 'browse', 'show me'
-    ];
-    const hasAction = actionKeywords.some(v => stripped.startsWith(v) || stripped.includes(` ${v} `) || stripped.includes(` ${v}`));
-    if (hasAction) {
-      return false;
-    }
-
-    // 2. Pure Greetings & Casual Pleasantries
+    // 1. Pure Greetings & Casual Pleasantries
     const greetings = [
       'hi', 'hello', 'hey', 'good morning', 'good evening', 'good afternoon', 'good night',
       'how are you', 'who are you', 'what are you', 'whats up', 'sup', 'yo', 'howdy',
@@ -343,37 +407,58 @@ function BlobOverlay() {
       return true;
     }
 
-    // 3. Screen Perception triggers
+    // 2. Screen Perception & Workspace queries
     const perceptionTriggers = [
       'can you see my screen', 'can you see me', 'can you read my screen', 
       'are you watching my screen', 'what do you see on my screen', 'what is on my screen',
-      'do you see my screen', 'what app is open'
+      'do you see my screen', 'what app is open', 'what is open', 'workspace status',
+      'how is my workspace', "how's my workspace", 'what am i doing', 'what am i working on',
+      'how is my setup', "how's my setup", 'state of my workspace'
     ];
-    if (perceptionTriggers.some(p => c.includes(p))) {
+    if (perceptionTriggers.some(p => c.includes(p) || stripped.includes(p))) {
       return true;
     }
 
-    // 4. Pure informational questions without action verbs
-    const questionStarters = ['what is', 'what are', 'why is', 'why do', 'who is', 'where is', 'how does', 'explain', 'tell me about'];
-    if (questionStarters.some(q => stripped.startsWith(q))) {
+    // 3. Informational questions & inquiries (starts with question words or asks to explain/summarize knowledge)
+    const questionStarters = [
+      'what is', 'what are', 'what was', 'what does', 'why is', 'why do', 'why does', 'who is',
+      'where is', 'where are', 'how does', 'how do', 'how is', 'how can', 'explain', 'tell me about',
+      'describe', 'define', 'summarize', 'is there', 'are there', 'do you know', 'which is', 'meaning of'
+    ];
+    if (questionStarters.some(q => stripped.startsWith(q) || c.startsWith(q))) {
+      return true;
+    }
+
+    // 4. Action Verbs check for imperative OS execution commands (must be at the beginning of the command)
+    const actionVerbs = [
+      'open', 'launch', 'start', 'play', 'extract', 'write', 'type', 'copy', 'paste',
+      'download', 'delete', 'run', 'send', 'calculate', 'scrape', 'convert', 'fill',
+      'inject', 'close', 'exit', 'quit', 'kill', 'click', 'press', 'select',
+      'tap', 'hit', 'switch to', 'focus', 'create', 'make', 'arrange', 'tile',
+      'split', 'maximize', 'minimize', 'restore', 'restart', 'sandbox', 'quarantine'
+    ];
+    const startsWithAction = actionVerbs.some(v => stripped.startsWith(v));
+    if (startsWithAction) {
+      return false;
+    }
+
+    // If it ends with question mark or is conversational inquiry
+    if (cmd.trim().endsWith('?')) {
       return true;
     }
 
     return false;
   };
 
-  const handleChatSubmit = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const text = chatInputText.trim();
+  const processUnifiedCommand = async (commandText: string, isVoice: boolean = false) => {
+    const text = commandText.trim();
     if (!text) return;
-    
-    setChatInputText('');
-    playPopSound();
-    
+
     // 1. Meta-OS Workspace Commands
     if (isMetaOS(text)) {
       setUiState('Working');
-      setAgentMessage(`Arranging workspace: "${text}"...`);
+      playPopSound();
+      setAgentMessage(`Arranging workspace...`);
       try {
         const metaResp = await fetch('http://127.0.0.1:8000/api/meta-os', {
           method: 'POST',
@@ -383,56 +468,35 @@ function BlobOverlay() {
         if (metaResp.ok) {
           const data = await metaResp.json();
           setUiState('Done');
-          setAgentMessage(data.message || "Workspace arranged.");
+          const msg = data.message || "Workspace arranged.";
+          setAgentMessage(msg);
+          if (isVoice) speak(msg);
           setTimeout(() => {
             setAgentMessage('');
-            setUiState('Idle');
-          }, 4000);
+            setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+          }, 3000);
         }
       } catch (err) {
-        setUiState('Idle');
+        setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
         setAgentMessage("Could not arrange workspace.");
         setTimeout(() => setAgentMessage(''), 3000);
       }
       return;
     }
-    
-    // 2. Conversational Mode (Greetings, Questions, Pleasantries)
-    if (isConversational(text)) {
-      setUiState('Thinking');
-      setAgentMessage("Thinking...");
-      try {
-        const chatResp = await fetch('http://127.0.0.1:8000/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: text })
-        });
-        const data = await chatResp.json();
-        setUiState('Done');
-        setAgentMessage(data.response || "No response received.");
-        setTimeout(() => {
-          setAgentMessage('');
-          setUiState('Idle');
-        }, Math.max(4000, (data.response?.length || 0) * 60));
-      } catch (err) {
-        setUiState('Idle');
-        setAgentMessage("Error connecting to chat engine.");
-        setTimeout(() => setAgentMessage(''), 3000);
-      }
-      return;
-    }
-    
-    // 3. Parallel Desktop Background Mode (e.g. "Research laptops in background", "work on this in parallel", Google Scholar, Arxiv, Deep Research)
+
+    // 2. Parallel Desktop Background Mode
     const isBackground = [
       "in background", "in the background", "background", "in parallel",
       "parallel desktop", "virtual desktop", "while i work", "while i continue coding", "without interrupting",
-      "google scholar", "arxiv", "research", "search for", "find papers", "list of", "make a list of",
+      "google scholar", "arxiv", "research", "find papers", "list of", "make a list of",
       "compare", "benchmark", "scrape", "literature review", "top laptops", "best laptops", "papers on"
     ].some(k => text.toLowerCase().includes(k));
 
     if (isBackground) {
       setUiState('Working');
-      setAgentMessage(`Operating in Parallel Desktop: "${text}"...`);
+      playPopSound();
+      setAgentMessage(`Working in Parallel Desktop...`);
+      if (isVoice) speak("Working on that in background.");
       try {
         const pResp = await fetch('http://127.0.0.1:8000/api/parallel-desktop/tasks', {
           method: 'POST',
@@ -443,23 +507,69 @@ function BlobOverlay() {
           const pData = await pResp.json();
           if (pData.task?.task_id) setActiveTaskId(pData.task.task_id);
           setUiState('Working');
-          setAgentMessage("Running in Parallel Desktop! Your real desktop is free.");
+          setAgentMessage("Running in Parallel Desktop!");
           setTimeout(() => {
-            setAgentMessage('View live stream in Parallel Desktop tab.');
-            setTimeout(() => {
-              setAgentMessage('');
-              setUiState('Idle');
-            }, 3500);
+            setAgentMessage('');
+            setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
           }, 3000);
           return;
         }
       } catch (err) {}
     }
 
+    // 3. Conversational Mode (Greetings, Questions, Pleasantries, Screen Perception, Workspace Q&A)
+    if (isConversational(text)) {
+      setUiState('Thinking');
+      playPopSound();
+      setAgentMessage("Thinking...");
+      try {
+        const chatResp = await fetch('http://127.0.0.1:8000/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: text })
+        });
+        const data = await chatResp.json();
+        if (chatResp.ok && data.response) {
+          setUiState('Done');
+          setAgentMessage(data.response);
+          if (isVoice) speak(data.response);
+          setTimeout(() => {
+            setAgentMessage('');
+            setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+          }, Math.max(4000, (data.response?.length || 0) * 60));
+        } else {
+          setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+          setAgentMessage("How can I assist you?");
+          setTimeout(() => setAgentMessage(''), 3000);
+        }
+      } catch (err) {
+        setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+        setAgentMessage("Error connecting to chat engine.");
+        setTimeout(() => setAgentMessage(''), 3000);
+      }
+      return;
+    }
+
     // 4. Standard Automation Mode (Foreground OS Execution)
     setUiState('Working');
-    setAgentMessage(`Executing: "${text}"...`);
+    playPopSound();
+    setAgentMessage(`Executing...`);
+    if (isVoice) speak("On it!");
     try {
+      let inferredMode = "now";
+      try {
+        const intentResp = await fetch('http://127.0.0.1:8000/api/parse-intent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: text })
+        });
+        if (intentResp.ok) {
+          const intentData = await intentResp.json();
+          if (intentData.trigger) inferredMode = intentData.mode + ":" + intentData.trigger;
+          else inferredMode = intentData.mode || "now";
+        }
+      } catch(e) {}
+
       const autoResp = await fetch('http://127.0.0.1:8000/api/watch-and-strike', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -468,20 +578,54 @@ function BlobOverlay() {
           target_bbox: null,
           condition: text,
           action_text: "",
-          mode: "now"
+          mode: inferredMode
         })
       });
       if (autoResp.ok) {
         const data = await autoResp.json();
-        if (data.task_id) setActiveTaskId(data.task_id);
+        if (data.task_id) {
+          setActiveTaskId(data.task_id);
+          
+          // Poll for completion
+          const pollInterval = setInterval(async () => {
+            try {
+              const statusResp = await fetch(`http://127.0.0.1:8000/api/status/${data.task_id}`);
+              if (statusResp.ok) {
+                const statusData = await statusResp.json();
+                if (!statusData.active) {
+                  clearInterval(pollInterval);
+                  setUiState('Done');
+                  setAgentMessage("Task complete.");
+                  if (isVoice) speak("Task complete.");
+                  setLatestThought('');
+                  setTimeout(() => {
+                    setAgentMessage('');
+                    setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+                  }, 3000);
+                }
+              }
+            } catch(e) {
+              clearInterval(pollInterval);
+              setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+            }
+          }, 2000);
+        }
       }
-      setUiState('Working');
-      setAgentMessage("Executing automation in background...");
     } catch (err) {
-      setUiState('Idle');
+      setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
       setAgentMessage("Error executing automation.");
       setTimeout(() => setAgentMessage(''), 3000);
     }
+  };
+
+  const handleChatSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const text = chatInputText.trim();
+    if (!text) return;
+    
+    setChatInputText('');
+    closeChat();
+    await processUnifiedCommand(text, false);
   };
 
   const handleMicClick = async (e: React.MouseEvent) => {
@@ -498,24 +642,6 @@ function BlobOverlay() {
         return;
     }
     toggleMic(e);
-  };
-
-  const playPopSound = () => {
-    try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(300, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(600, ctx.currentTime + 0.1);
-      gain.gain.setValueAtTime(0, ctx.currentTime);
-      gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.1);
-    } catch(e) {}
   };
 
   const speak = (text: string) => {
@@ -648,254 +774,38 @@ function BlobOverlay() {
           const text = rawText.toLowerCase().replace(/[^\w\s]/gi, '').replace(/\s+/g, ' ');
           if (!text) return;
 
+          // Strict Wake-word requirement: Only execute if "iris" (or phonetic variations) is in the command
+          const hasWakeWord = text.includes('iris') || /\b(iris|ires|iriss|irish|ayris|isis|eyris)\b/i.test(rawText) || /\b(iris|ires|iriss|irish|ayris|isis|eyris)\b/i.test(text);
+          if (!hasWakeWord) {
+            // Completely ignore ambient speech/room talk unless addressed to "iris"
+            return;
+          }
+
           console.log("[Mic Heard]:", rawText);
-          setLatestThought(`Heard: "${rawText}"`);
-          
-          // Use includes for a much more robust match that ignores trailing spaces or slightly extra words
-          const isGreeting = text === 'hello iris' || text === 'hi iris' || text === 'iris' || text.includes('hey iris') || text.includes('are you there iris') || text.includes('can you hear me');
-          
+
+          // Clean wake words to extract actual command
+          const cleaned = rawText
+            .replace(/\b(hey|hi|hello|ok|okay)?\s*(iris|ires|iriss|irish|ayris|isis|eyris)\b[,:]?\s*/gi, '')
+            .trim();
+          const cleanedLower = cleaned.toLowerCase().replace(/[^\w\s]/gi, '').trim();
+
+          // Check if purely a greeting or check-in
+          const isGreeting = !cleaned || (['hi', 'hello', 'hey', 'are you there', 'can you hear me', 'yo', 'sup'].includes(cleanedLower));
           if (isGreeting) {
             const msg = "Yes, I can hear you! How can I help?";
             playPopSound();
             setAgentMessage(msg);
+            speak(msg);
             setTimeout(() => setAgentMessage(''), 4000);
             return;
           }
-            
-          if (text.includes('iris') || isMicOnRef.current) {
-            const command = text.replace(/.*iris\s*/, '').trim();
-            const fullCommandText = command.length > 0 ? command : data.text;
-            
-            // Direct voice routing for Meta-OS (Split Screen, Fullscreen, PIP, Spotlight, Dev Layout)
-            if (text.includes('split') || text.includes('side by side') || text.includes('zen') || text.includes('focus') || 
-                text.includes('fullscreen') || text.includes('hide taskbar') || text.includes('hide start') || text.includes('tile') || 
-                text.includes('restore') || text.includes('normal') || text.includes('spotlight') || text.includes('picture in picture') || 
-                text.includes('pip') || text.includes('pin') || text.includes('mini corner') || text.includes('dev layout') || text.includes('developer layout')) {
-              setUiState('Working');
-              playPopSound();
-              setAgentMessage("Arranging workspace...");
-              try {
-                const metaResp = await fetch('http://127.0.0.1:8000/api/meta-os', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ command: data.text })
-                });
-                if (metaResp.ok) {
-                  const metaData = await metaResp.json();
-                  setUiState('Done');
-                  setAgentMessage(metaData.message || "Workspace arranged.");
-                  setTimeout(() => {
-                    setAgentMessage('');
-                    setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-                  }, 3000);
-                }
-              } catch (e) {
-                setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-                setAgentMessage("Could not update window state.");
-                setTimeout(() => setAgentMessage(''), 3000);
-              }
-              return;
-            }
 
-            if (text.includes('extract') || text.includes('copy') || text.includes('paste') || text.includes('move') || 
-                text.includes('open') || text.includes('search') || text.includes('click') || text.includes('play') || text.includes('type') ||
-                text.includes('select') || text.includes('choose') || text.includes('start') || text.includes('scroll') || text.includes('launch') || text.includes('run') || text.includes('close') ||
-                text.includes('sandbox') || text.includes('inspect') || text.includes('chamber') || text.includes('quarantine') || text.includes('isolate') || text.includes('safely') || text.includes('scan') || text.includes('safe')) {
-              // Route to /api/watch-and-strike (Automation Engine)
-              setUiState('Working');
-              playPopSound();
-              setAgentMessage("Executing automation...");
-              let inferredMode = "now";
-              let isParallel = false;
-              try {
-                const intentResp = await fetch('http://127.0.0.1:8000/api/parse-intent', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ command: data.text })
-                });
-                if (intentResp.ok) {
-                  const intentData = await intentResp.json();
-                  if (intentData.mode === 'parallel_desktop') {
-                    isParallel = true;
-                  }
-                  if (intentData.trigger) {
-                    inferredMode = intentData.mode + ":" + intentData.trigger;
-                  } else {
-                    inferredMode = intentData.mode || "now";
-                  }
-                }
-              } catch (e) {
-                console.error("Intent routing failed, defaulting to now:", e);
-              }
-
-              if (isParallel) {
-                setAgentMessage(`Operating in Parallel Desktop: "${data.text}"...`);
-                try {
-                  const pResp = await fetch('http://127.0.0.1:8000/api/parallel-desktop/tasks', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ condition: data.text, mode: 'autonomous' })
-                  });
-                  if (pResp.ok) {
-                    const pData = await pResp.json();
-                    if (pData.task?.task_id) setActiveTaskId(pData.task.task_id);
-                    setUiState('Working');
-                    setAgentMessage("Running in Parallel Desktop! Your real desktop is free.");
-                    setTimeout(() => {
-                      setAgentMessage('');
-                      setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-                    }, 4000);
-                    return;
-                  }
-                } catch (e) {}
-              }
-
-              try {
-                const resp = await fetch('http://127.0.0.1:8000/api/watch-and-strike', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    source_bbox: null,
-                    target_bbox: null,
-                    condition: data.text,
-                    action_text: "",
-                    mode: inferredMode
-                  })
-                });
-                if (resp.ok) {
-                  const resData = await resp.json();
-                  if (resData.task_id) setActiveTaskId(resData.task_id);
-                  if (resData.parallel_desktop) {
-                    setUiState('Working');
-                    setAgentMessage("Running in Parallel Desktop! Your real desktop is free.");
-                    setTimeout(() => {
-                      setAgentMessage('');
-                      setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-                    }, 4000);
-                    return;
-                  }
-                  setUiState('Working');
-                  
-                  // Poll for completion
-                  const pollInterval = setInterval(async () => {
-                    try {
-                      const statusResp = await fetch(`http://127.0.0.1:8000/api/status/${resData.task_id}`);
-                      if (statusResp.ok) {
-                        const statusData = await statusResp.json();
-                        if (!statusData.active) {
-                          clearInterval(pollInterval);
-                          setUiState('Done');
-                          setAgentMessage("Task complete.");
-                          setLatestThought('');
-                          setTimeout(() => {
-                            setAgentMessage('');
-                            setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-                          }, 4000);
-                        }
-                      }
-                    } catch (e) {
-                      clearInterval(pollInterval);
-                      setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-                      setAgentMessage("Error checking status.");
-                      setLatestThought('');
-                      setTimeout(() => setAgentMessage(''), 3000);
-                    }
-                  }, 2000);
-                } else {
-                  setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-                  setAgentMessage("Error executing task.");
-                  setTimeout(() => setAgentMessage(''), 3000);
-                }
-              } catch (e) {
-                setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-                setAgentMessage("Error occurred.");
-                setTimeout(() => setAgentMessage(''), 3000);
-              }
-              return;
-            }
-
-            if (isConversational(data.text)) {
-              // Route to /api/chat (Conversational Engine)
-              setUiState('Thinking');
-              playPopSound();
-              setAgentMessage("Thinking...");
-              try {
-                const resp = await fetch('http://127.0.0.1:8000/api/chat', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ text: data.text })
-                });
-                const resData = await resp.json();
-                if (resp.ok) {
-                  setUiState('Done');
-                  setAgentMessage(resData.response);
-                  speak(resData.response);
-                  setTimeout(() => {
-                    setAgentMessage('');
-                    setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-                  }, Math.max(4000, resData.response.length * 60));
-                } else {
-                  setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-                  setAgentMessage("Error connecting to chat engine.");
-                  setTimeout(() => {
-                    setAgentMessage('');
-                  }, 3000);
-                }
-              } catch (e) {
-                console.error(e);
-                setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-              }
-              return;
-            }
-
-            // Fallback for Meta-OS or generic commands
-            setUiState('Thinking');
-            playPopSound();
-            setAgentMessage("Executing command...");
-            let fallbackMode = "now";
-            if (text.includes('always') || text.includes('keep') || text.includes('continuously') || text.includes('repeatedly')) fallbackMode = "always";
-            else if (text.includes('when') || text.includes('whenever') || text.includes('if')) fallbackMode = "when";
-            else if (text.includes('background') || text.includes('ghost') || text.includes('silently')) fallbackMode = "ghost";
-
-            try {
-              const resp = await fetch('http://127.0.0.1:8000/api/watch-and-strike', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  source_bbox: null,
-                  target_bbox: null,
-                  condition: data.text,
-                  action_text: "",
-                  mode: fallbackMode
-                })
-              });
-              if (resp.ok) {
-                const resData = await resp.json();
-                if (resData.task_id) {
-                  setActiveTaskId(resData.task_id);
-                  setUiState('Working');
-                  setAgentMessage("Executing automation in background...");
-                } else {
-                  setUiState('Done');
-                  setAgentMessage("Command executed.");
-                  setTimeout(() => {
-                    setAgentMessage('');
-                    setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-                  }, 3000);
-                }
-              }
-            } catch (e) {
-              setUiState('Idle');
-              setAgentMessage("Error occurred.");
-              setTimeout(() => {
-                setAgentMessage('');
-              }, 2000);
-            }
-          }
+          // Execute command via unified engine with spoken voice feedback
+          await processUnifiedCommand(cleaned, true);
         }
-        } catch (e) {
-          console.error("SSE parse error", e);
-        }
+      } catch (e) {
+        console.error("SSE parse error", e);
+      }
       };
 
       eventSource.onmessage = handleMessage;
@@ -996,7 +906,7 @@ function BlobOverlay() {
     };
     
     checkPipelines();
-    const interval = setInterval(checkPipelines, (uiState === 'Working' || activePipelines.length > 0) ? 200 : 400);
+    const interval = setInterval(checkPipelines, (uiState === 'Working' || activePipelines.length > 0) ? 400 : 3000);
     return () => clearInterval(interval);
   }, [activeTaskId, uiState, activePipelines.length]);
 
@@ -1074,10 +984,10 @@ function BlobOverlay() {
   const handleMouseLeave = () => {
     if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
     hoverTimeoutRef.current = setTimeout(() => {
-      if (!isChatOpen) {
+      if (!isChatOpen && !floatingDossier) {
         setIsHovered(false);
       }
-      if (!isDragging && (window as any).electronAPI) {
+      if (!isDragging && !isChatOpen && !floatingDossier && (window as any).electronAPI) {
         (window as any).electronAPI.setClickThrough(true);
       }
     }, 250);
@@ -1695,6 +1605,14 @@ function BlobOverlay() {
             </svg>
           </div>
         </div>
+      )}
+
+      {/* Floating Autonomous Dossier Result HUD (Pop on completion) */}
+      {floatingDossier && (
+        <FloatingResultHUD
+          task={floatingDossier}
+          onClose={handleCloseDossier}
+        />
       )}
     </div>
   );
@@ -2351,6 +2269,16 @@ export default function App() {
                           }
                           if ((window as any).electronAPI && (window as any).electronAPI.resumeWorkflow) {
                             await (window as any).electronAPI.resumeWorkflow(payload);
+                          } else {
+                            try {
+                              await fetch('http://127.0.0.1:8000/api/ai/command', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ command: `open workspace ${payload.name}` })
+                              });
+                            } catch (e) {
+                              console.warn('Restore command error:', e);
+                            }
                           }
                         }}>
                           <span>⚡</span> Restore Environment

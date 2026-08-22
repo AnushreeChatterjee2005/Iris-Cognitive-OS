@@ -1,11 +1,21 @@
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
+import sys
+import os
+import ctypes
+
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uuid
-import sys
-import os
 import time
 import json
 import random
@@ -14,7 +24,6 @@ from typing import Optional
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import watcher
-import ctypes
 from meta_os import meta_engine, rule_engine
 from workspace_manager import workspace_engine
 from parallel_desktop_engine import parallel_engine, PREDEFINED_ENVIRONMENTS
@@ -391,20 +400,20 @@ Answer the user's question concisely, helpfully, and accurately. Do not use aste
 @app.post("/api/mic/start")
 async def start_mic():
     global mic_active
-    success = audio_engine.start()
+    success = await asyncio.to_thread(audio_engine.start)
     mic_active = audio_engine.is_running
     return {"status": "started" if success else "error"}
 
 @app.post("/api/mic/stop")
 async def stop_mic():
     global mic_active
-    audio_engine.stop()
+    await asyncio.to_thread(audio_engine.stop)
     mic_active = False
     return {"status": "stopped"}
 
 @app.get("/api/mic/status")
 async def get_mic_status():
-    return audio_engine.get_status()
+    return await asyncio.to_thread(audio_engine.get_status)
 
 is_shutting_down = False
 
@@ -672,6 +681,9 @@ class ParallelInputEventRequest(BaseModel):
 class ParallelBringToDesktopRequest(BaseModel):
     type: Optional[str] = "all"
 
+class ParallelExportRequest(BaseModel):
+    format: Optional[str] = "txt" # txt, doc, docx, pdf
+
 class ParallelEnvLaunchRequest(BaseModel):
     env_id: str
 
@@ -762,6 +774,13 @@ async def bring_parallel_results_to_desktop(task_id: str, req: ParallelBringToDe
     """Transfers task artifacts (files, URLs, reports) to user's real host desktop."""
     transfer_type = req.type if req else "all"
     res = parallel_engine.bring_to_desktop(task_id, transfer_type=transfer_type)
+    return res
+
+@app.post("/api/parallel-desktop/tasks/{task_id}/export")
+async def export_parallel_task_dossier(task_id: str, req: ParallelExportRequest = None):
+    """Exports dossier directly to Desktop as .txt, .docx/.doc, or .pdf."""
+    fmt = req.format if req and req.format else "txt"
+    res = parallel_engine.export_dossier(task_id, format_type=fmt)
     return res
 
 async def parallel_desktop_feed_generator(request: Request):

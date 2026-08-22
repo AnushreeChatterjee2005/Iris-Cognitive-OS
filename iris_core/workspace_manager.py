@@ -24,6 +24,14 @@ import win32api
 import win32process
 import psutil
 
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 import win32_engine
 
 DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "iris_timeline.sqlite")
@@ -511,14 +519,33 @@ class WorkspaceManager:
             rect = win["rect"]
             hwnd = win["hwnd"]
 
+            # Filter out desktop background wallpaper and internal IRIS Electron window
+            if cls in ['Progman', 'WorkerW', 'Shell_TrayWnd'] or title in ['Program Manager', '']:
+                continue
+            if pname in ['electron.exe', 'iris.exe'] and ('hackathon-iris' in title.lower() or 'iris' in title.lower()):
+                continue
+
             friendly_name = self._resolve_friendly_name(title, cls, pname)
             running_names_set.add(friendly_name.lower())
             p_base = pname.replace(".exe", "").lower()
             if p_base:
                 running_names_set.add(p_base)
 
+            # Assign accurate app identifier for instant matching
+            p_clean = pname.lower().replace(".exe", "")
+            app_id = p_clean
+            if "chrome" in p_clean:
+                app_id = "chrome"
+            elif "code" in p_clean or "antigravity" in p_clean:
+                app_id = "code"
+            elif "notepad" in p_clean:
+                app_id = "notepad"
+            elif "terminal" in p_clean or "wt" in p_clean:
+                app_id = "terminal"
+
             running_apps.append({
                 "hwnd": hwnd,
+                "appIdentifier": app_id,
                 "name": friendly_name,
                 "windowTitle": title,
                 "windowClass": cls,
@@ -592,47 +619,96 @@ class WorkspaceManager:
         }
 
     def _resolve_friendly_name(self, title: str, cls: str, pname: str) -> str:
-        """Produces a clean, human-recognizable name for windows."""
-        p_clean = pname.lower().replace(".exe", "")
-        t_lower = title.lower()
-        cls_lower = cls.lower()
+        """Produces a clean, human-recognizable name for windows without misidentifying Electron apps."""
+        p_clean = pname.lower().replace(".exe", "").strip()
+        t_lower = title.lower().strip()
+        cls_lower = cls.lower().strip()
 
-        if "chrome" in p_clean or "chrome" in cls_lower:
+        # 1. Process name explicit matching
+        if p_clean in ["chrome", "google chrome"]:
             return "Google Chrome"
-        if "code" in p_clean or "vscode" in p_clean or "visual studio code" in t_lower:
+        if p_clean in ["code", "vscode"] or "visual studio code" in t_lower:
             return "Visual Studio Code"
-        if "notepad" in p_clean or "notepad" in cls_lower:
+        if p_clean in ["antigravity", "antigravity ide"]:
+            return "Visual Studio Code"
+        if p_clean in ["cursor"]:
+            return "Cursor"
+        if p_clean in ["wispr flow", "wisprflow"]:
+            return "Wispr Flow"
+        if p_clean in ["notepad"]:
             return "Notepad"
-        if "windowsterminal" in p_clean or "wt" in p_clean or "terminal" in t_lower:
+        if p_clean in ["windowsterminal", "wt", "powershell", "pwsh", "cmd"]:
             return "Windows Terminal"
-        if "discord" in p_clean or "discord" in t_lower:
+        if p_clean in ["discord"]:
             return "Discord"
-        if "slack" in p_clean or "slack" in t_lower:
+        if p_clean in ["slack"]:
             return "Slack"
-        if "spotify" in p_clean or "spotify" in t_lower:
+        if p_clean in ["spotify"]:
             return "Spotify"
-        if "excel" in p_clean or "xlmain" in cls_lower:
+        if p_clean in ["excel"]:
             return "Microsoft Excel"
-        if "winword" in p_clean or "word" in t_lower:
+        if p_clean in ["winword"]:
             return "Microsoft Word"
-        if "explorer" in p_clean or "cabinetwclass" in cls_lower:
-            return "File Explorer"
-        if "obsidian" in p_clean or "obsidian" in t_lower:
+        if p_clean in ["powerpnt"]:
+            return "Microsoft PowerPoint"
+        if p_clean in ["onenote", "onenotem"]:
+            return "Microsoft OneNote"
+        if p_clean in ["obsidian"]:
             return "Obsidian"
-        if "notion" in p_clean or "notion" in t_lower:
+        if p_clean in ["notion"]:
             return "Notion"
-        if "powershell" in p_clean:
-            return "PowerShell"
-        if "cmd" in p_clean:
-            return "Command Prompt"
-        if "calc" in p_clean:
-            return "Calculator"
+        if p_clean in ["figma"]:
+            return "Figma"
+        if p_clean in ["msedge", "edge"]:
+            return "Microsoft Edge"
+        if p_clean in ["brave"]:
+            return "Brave Browser"
+        if p_clean in ["firefox"]:
+            return "Mozilla Firefox"
+        if p_clean in ["explorer"]:
+            return "File Explorer"
+        if p_clean in ["applicationframehost"]:
+            if "settings" in t_lower:
+                return "Windows Settings"
+            if "calculator" in t_lower or "calc" in t_lower:
+                return "Calculator"
+            return title.strip() or "Windows App"
+        if "cmdpal" in p_clean:
+            return "Command Palette"
 
-        # Fallback to trimmed window title or process name
+        # 2. Window Class matching (only specific non-generic classes)
+        if "xlmain" in cls_lower:
+            return "Microsoft Excel"
+        if "cabinetwclass" in cls_lower:
+            return "File Explorer"
+        if "notepad" in cls_lower:
+            return "Notepad"
+        if "cascadia_hosting_window_class" in cls_lower or "consolewindowclass" in cls_lower:
+            return "Windows Terminal"
+
+        # 3. Window title matching
+        if "google chrome" in t_lower:
+            return "Google Chrome"
+        if "visual studio code" in t_lower or "antigravity ide" in t_lower:
+            return "Visual Studio Code"
+        if "discord" in t_lower:
+            return "Discord"
+        if "slack" in t_lower:
+            return "Slack"
+        if "spotify" in t_lower:
+            return "Spotify"
+        if "notion" in t_lower:
+            return "Notion"
+        if "obsidian" in t_lower:
+            return "Obsidian"
+        if "figma" in t_lower:
+            return "Figma"
+
+        # 4. Fallback to clean trimmed window title or process name
         clean_title = title.split(" - ")[-1].split(" – ")[-1].strip()
-        if len(clean_title) > 2:
+        if len(clean_title) > 2 and not clean_title.isdigit():
             return clean_title[:30]
-        return (p_clean.capitalize() if p_clean else title[:30])
+        return p_clean.replace("_", " ").title() if p_clean else (title[:30] or "Application")
 
     # --- MULTI-MONITOR DETECTION ---
 
@@ -705,6 +781,12 @@ class WorkspaceManager:
             pname = win["pname"]
             exe_path = win["exe"]
             wx, wy, ww, wh = win["rect"]
+
+            # Filter out desktop background wallpaper and internal IRIS Electron window
+            if cls in ['Progman', 'WorkerW', 'Shell_TrayWnd'] or title in ['Program Manager', '']:
+                continue
+            if pname in ['electron.exe', 'iris.exe'] and ('hackathon-iris' in title.lower() or 'iris' in title.lower()):
+                continue
 
             # Match window to monitor
             assigned_mon_idx = 0
@@ -843,53 +925,46 @@ class WorkspaceManager:
             nw = float(app_spec.get("width", 0.5))
             nh = float(app_spec.get("height", 1.0))
 
-            target_px_x = int(work_area["x"] + (nx * work_area["width"]))
-            target_px_y = int(work_area["y"] + (ny * work_area["height"]))
-            target_px_w = max(200, int(nw * work_area["width"]))
-            target_px_h = max(150, int(nh * work_area["height"]))
+            target_px_x = int(work_area["x"] + round(nx * work_area["width"]))
+            target_px_y = int(work_area["y"] + round(ny * work_area["height"]))
+            target_px_w = max(200, int(round(nw * work_area["width"])))
+            target_px_h = max(150, int(round(nh * work_area["height"])))
+
+            # Prevent bottom border from ever slipping behind or below the Windows Taskbar / Start Menu
+            max_avail_y = work_area["y"] + work_area["height"]
+            if target_px_y + target_px_h >= max_avail_y - 8:
+                target_px_h = max(150, max_avail_y - target_px_y - 8)
 
             # Find or launch application window HWND
             hwnd = self._find_or_launch_app_window(app_spec, thought_callback)
 
             if hwnd and win32gui.IsWindow(hwnd):
                 try:
-                    # 1. Restore if minimized or maximized to allow precise coordinate sizing
-                    if win32gui.IsIconic(hwnd) or user32.IsZoomed(hwnd):
-                        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                        time.sleep(0.08)
+                    # Determine target window state
+                    is_full_max = app_state == "maximized" or (nw >= 0.98 and nh >= 0.98)
+                    target_state = "maximized" if is_full_max else "normal"
 
-                    # 2. Position and resize to exact target slot
-                    win32gui.SetWindowPos(
+                    # Apply robust multi-pass position & size engine
+                    positioned = win32_engine.position_and_size_window(
                         hwnd,
-                        win32con.HWND_TOP,
                         target_px_x,
                         target_px_y,
                         target_px_w,
                         target_px_h,
-                        win32con.SWP_SHOWWINDOW | win32con.SWP_FRAMECHANGED
+                        state=target_state
                     )
 
-                    # If the app state was specifically saved as maximized
-                    if app_state == "maximized" or (nw >= 0.98 and nh >= 0.98):
-                        win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
-
-                    # 3. Force redraw & frame refresh
-                    win32gui.RedrawWindow(
-                        hwnd,
-                        None,
-                        0,
-                        win32con.RDW_FRAME | win32con.RDW_INVALIDATE | win32con.RDW_UPDATENOW | win32con.RDW_ALLCHILDREN
-                    )
-
-                    # 4. Bring to front
-                    win32_engine.bring_window_to_front(hwnd)
-
-                    restored_results.append({
-                        "name": app_name,
-                        "status": "positioned",
-                        "hwnd": hwnd,
-                        "bounds": {"x": target_px_x, "y": target_px_y, "width": target_px_w, "height": target_px_h}
-                    })
+                    if positioned:
+                        # Bring to front in proper Z-order
+                        win32_engine.bring_window_to_front(hwnd)
+                        restored_results.append({
+                            "name": app_name,
+                            "status": "positioned",
+                            "hwnd": hwnd,
+                            "bounds": {"x": target_px_x, "y": target_px_y, "width": target_px_w, "height": target_px_h}
+                        })
+                    else:
+                        restored_results.append({"name": app_name, "status": "failed_position", "error": "position_and_size_window failed"})
                 except Exception as e:
                     print(f"[WorkspaceManager] Error positioning {app_name} (HWND: {hwnd}): {e}")
                     restored_results.append({"name": app_name, "status": "failed_position", "error": str(e)})
@@ -906,13 +981,13 @@ class WorkspaceManager:
 
         success_count = sum(1 for r in restored_results if r.get("status") == "positioned")
         return {
-            "success": True,
+            "success": success_count > 0,
             "workspaceId": ws["id"],
             "workspaceName": ws["name"],
             "appsTotal": len(apps),
             "appsRestored": success_count,
             "details": restored_results,
-            "message": f"Opened '{ws['name']}' workspace ({success_count}/{len(apps)} apps arranged)."
+            "message": f"Opened '{ws['name']}' workspace ({success_count}/{len(apps)} apps arranged)." if success_count > 0 else f"No running application windows found for '{ws['name']}'."
         }
 
     def _find_or_launch_app_window(self, app_spec: Dict[str, Any], thought_callback=None) -> int:
@@ -946,6 +1021,31 @@ class WorkspaceManager:
                     launched = True
                 except Exception:
                     pass
+
+        # Check known common paths for standard desktop apps
+        if not launched:
+            ident_clean = (ident or name).lower()
+            known_locations = []
+            if "chrome" in ident_clean:
+                known_locations = [
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                    os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
+                ]
+            elif "edge" in ident_clean:
+                known_locations = [
+                    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+                ]
+
+            for loc in known_locations:
+                if os.path.exists(loc):
+                    try:
+                        subprocess.Popen([loc])
+                        launched = True
+                        break
+                    except Exception:
+                        pass
 
         # Try resolver via win32_engine
         if not launched:

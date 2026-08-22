@@ -1,41 +1,47 @@
 import os
 import sys
 import threading
-import queue
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
-import numpy as np
+from dotenv import load_dotenv
+
+# Load environment variables for GROQ_API_KEY
+base_dir = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(base_dir, "..", ".env"), override=True)
+load_dotenv()
 
 try:
-    import sherpa_onnx
-    import sounddevice as sd
+    import speech_recognition as sr
 except ImportError:
-    sherpa_onnx = None
-    sd = None
+    sr = None
 
 
 class AudioEngine:
     """
-    On-device Speech Recognition & Voice Activity Detection Engine for IRIS
-    Powered by Sherpa-ONNX, Qwen3-ASR (0.6B INT8), and Silero VAD.
+    High-Performance Speech Recognition & Voice Activity Engine for IRIS.
+    Tier 1: Groq Cloud Whisper Large V3 Turbo (~150ms latency, high accuracy)
+    Tier 2: Google Web Speech Recognition (zero setup, robust instant fallback)
     """
-    def __init__(self, models_dir: Optional[str] = None):
-        if models_dir is None:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            self.models_dir = os.path.join(base_dir, "models")
-        else:
-            self.models_dir = models_dir
 
-        self.recognizer: Optional[sherpa_onnx.OfflineRecognizer] = None
-        self.vad: Optional[sherpa_onnx.VoiceActivityDetector] = None
+    # Common Whisper / ASR hallucinations on background silence
+    HALLUCINATIONS = {
+        "thank you.", "thank you", "thanks.", "thanks", "thank you very much.",
+        "thanks for watching.", "thanks for watching", "thank you for watching.",
+        "subtitles by", "amara.org", "you", "bye.", "bye", "mbc", "subtitles",
+        ".", "..", "...", "so", "the end", "okay.", "okay"
+    }
+
+    def __init__(self, models_dir: Optional[str] = None):
+        self.models_dir = models_dir or os.path.join(base_dir, "models")
         self.is_running = False
-        self._record_thread: Optional[threading.Thread] = None
-        self._process_thread: Optional[threading.Thread] = None
-        self._audio_queue: queue.Queue = queue.Queue()
+        self._stopper: Optional[Callable[[bool], None]] = None
+        self._executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="iris_stt")
         self._callbacks: list[Callable[[str], None]] = []
-        self._initialized = False
-        self._init_lock = threading.Lock()
-        self.sample_rate = 16000
+        self._lock = threading.Lock()
+        self._recognizer: Optional[sr.Recognizer] = None
+        self._mic: Optional[sr.Microphone] = None
+        self.groq_api_key = os.environ.get("GROQ_API_KEY", "").strip()
 
     def register_callback(self, callback: Callable[[str], None]):
         """Register a callback function to receive recognized speech text."""
@@ -43,203 +49,164 @@ class AudioEngine:
             self._callbacks.append(callback)
 
     def unregister_callback(self, callback: Callable[[str], None]):
+        """Unregister a previously registered callback function."""
         if callback in self._callbacks:
             self._callbacks.remove(callback)
 
-    def _ensure_models_loaded(self):
-        """Initializes the Qwen3-ASR recognizer and Silero VAD."""
-        with self._init_lock:
-            if self._initialized:
+    def _init_speech_recognition(self) -> bool:
+        """Initializes speech_recognition Recognizer and Microphone with optimized settings."""
+        if sr is None:
+            print("[AudioEngine] Error: speech_recognition module is not installed.")
+            return False
+
+        try:
+            self.groq_api_key = os.environ.get("GROQ_API_KEY", "").strip()
+            self._recognizer = sr.Recognizer()
+            self._mic = sr.Microphone()
+
+            # Responsive parameters
+            self._recognizer.energy_threshold = 150
+            self._recognizer.dynamic_energy_threshold = True
+            self._recognizer.dynamic_energy_adjustment_damping = 0.15
+            self._recognizer.dynamic_energy_ratio = 1.4
+            self._recognizer.pause_threshold = 0.5          # 500ms silence ends phrase for fast response
+            self._recognizer.phrase_threshold = 0.15        # 150ms minimum speech onset
+            self._recognizer.non_speaking_duration = 0.3
+
+            # Calibrate ambient noise quickly (300ms)
+            try:
+                with self._mic as source:
+                    self._recognizer.adjust_for_ambient_noise(source, duration=0.3)
+                # Keep energy threshold in a responsive range
+                self._recognizer.energy_threshold = max(60, min(self._recognizer.energy_threshold, 350))
+                print(f"[AudioEngine] Calibrated microphone ambient threshold: {self._recognizer.energy_threshold:.1f}")
+            except Exception as ne:
+                print(f"[AudioEngine] Ambient calibration note: {ne}")
+
+            return True
+        except Exception as e:
+            print(f"[AudioEngine] Failed to initialize microphone: {e}")
+            return False
+
+    def _is_hallucination(self, text: str) -> bool:
+        """Detects and suppresses common silence artifacts from Whisper."""
+        cleaned = text.strip().lower()
+        if not cleaned or len(cleaned) <= 1:
+            return True
+        if cleaned in self.HALLUCINATIONS:
+            return True
+        if any(h in cleaned for h in ["subtitles by", "translated by", "amara.org", "community subtitles"]):
+            return True
+        return False
+
+    def _transcribe_audio_chunk(self, audio: sr.AudioData):
+        """Asynchronously transcribes an audio chunk using Groq Whisper -> Google Speech fallback."""
+        if not audio or not self.is_running:
+            return
+
+        text = None
+        engine_used = None
+
+        # 1. Primary: Groq Whisper Large V3 Turbo (near-instant ~150ms)
+        if self.groq_api_key:
+            try:
+                os.environ["GROQ_API_KEY"] = self.groq_api_key
+                text = self._recognizer.recognize_groq(
+                    audio,
+                    model="whisper-large-v3-turbo"
+                )
+                engine_used = "Groq Whisper"
+            except sr.UnknownValueError:
+                return
+            except Exception as ge:
+                print(f"[AudioEngine] Groq STT note: {ge}. Falling back to Google...")
+
+        # 2. Fallback: Google Web Speech Recognition
+        if not text:
+            try:
+                text = self._recognizer.recognize_google(audio)
+                engine_used = "Google Speech"
+            except sr.UnknownValueError:
+                return
+            except Exception as goe:
+                print(f"[AudioEngine] Google STT note: {goe}")
                 return
 
-            qwen_dir = os.path.join(self.models_dir, "qwen3-asr")
-            conv = os.path.join(qwen_dir, "conv_frontend.onnx")
-            enc = os.path.join(qwen_dir, "encoder.int8.onnx")
-            dec = os.path.join(qwen_dir, "decoder.int8.onnx")
-            tok = os.path.join(qwen_dir, "tokenizer")
-            vad_path = os.path.join(self.models_dir, "silero_vad.onnx")
+        if text:
+            text = text.strip()
+            if self._is_hallucination(text):
+                return
 
-            # Verify model files
-            for p in [conv, enc, dec, tok]:
-                if not os.path.exists(p):
-                    raise FileNotFoundError(f"Missing Qwen3-ASR model component at {p}")
+            print(f"[AudioEngine] Transcribed ({engine_used}): \"{text}\"")
+            for cb in list(self._callbacks):
+                try:
+                    cb(text)
+                except Exception as cbe:
+                    print(f"[AudioEngine] Callback dispatch error: {cbe}")
 
-            if not os.path.exists(vad_path):
-                raise FileNotFoundError(f"Missing Silero VAD model at {vad_path}")
+    def _on_audio_captured(self, recognizer: sr.Recognizer, audio: sr.AudioData):
+        """Callback invoked whenever a phrase is captured by the background listener."""
+        if self.is_running:
+            self._executor.submit(self._transcribe_audio_chunk, audio)
 
-            print("[AudioEngine] Loading Qwen3-ASR (0.6B INT8) recognizer...")
-            self.recognizer = sherpa_onnx.OfflineRecognizer.from_qwen3_asr(
-                conv_frontend=conv,
-                encoder=enc,
-                decoder=dec,
-                tokenizer=tok,
-                num_threads=4,
-                sample_rate=self.sample_rate,
-                feature_dim=128,
-                decoding_method="greedy_search"
-            )
+    def start(self) -> bool:
+        """Starts microphone recording and transcription in background."""
+        with self._lock:
+            if self.is_running:
+                return True
 
-            print("[AudioEngine] Loading Silero VAD...")
-            vad_config = sherpa_onnx.VadModelConfig()
-            vad_config.silero_vad.model = vad_path
-            vad_config.silero_vad.threshold = 0.25            # Highly sensitive to catch speech onset
-            vad_config.silero_vad.min_silence_duration = 0.35 # 350ms silence before endpointing
-            vad_config.silero_vad.min_speech_duration = 0.15  # 150ms speech duration
-            vad_config.silero_vad.max_speech_duration = 15.0  # 15s max utterance
-            vad_config.sample_rate = self.sample_rate
+            success = self._init_speech_recognition()
+            if not success:
+                return False
 
-            self.vad = sherpa_onnx.VoiceActivityDetector(vad_config, buffer_size_in_seconds=60)
-            self._initialized = True
-            print("[AudioEngine] Initialized successfully with Qwen3-ASR & Silero VAD.")
+            self.is_running = True
+            try:
+                self._stopper = self._recognizer.listen_in_background(
+                    self._mic,
+                    self._on_audio_captured,
+                    phrase_time_limit=15
+                )
+                active_model = "Groq Whisper Large V3 Turbo" if self.groq_api_key else "Google Web Speech"
+                print(f"[AudioEngine] Microphone active (Engine: {active_model}).")
+                return True
+            except Exception as e:
+                print(f"[AudioEngine] Failed to start background listener: {e}")
+                self.is_running = False
+                return False
+
+    def stop(self):
+        """Stops the audio stream and background listener immediately."""
+        with self._lock:
+            if not self.is_running:
+                return
+
+            self.is_running = False
+            if self._stopper:
+                try:
+                    self._stopper(wait_for_stop=False)
+                except Exception as e:
+                    print(f"[AudioEngine] Stopper note: {e}")
+                self._stopper = None
+
+            print("[AudioEngine] Microphone stopped.")
 
     def get_status(self) -> dict:
         """Returns the current state and device information of the audio engine."""
-        device_info = {}
+        device_name = "Default System Microphone"
         try:
-            if sd is not None:
-                default_in = sd.default.device[0]
-                devices = sd.query_devices()
-                if 0 <= default_in < len(devices):
-                    device_info = {
-                        "name": devices[default_in].get("name", "Unknown"),
-                        "index": default_in,
-                        "default_samplerate": devices[default_in].get("default_samplerate", 16000)
-                    }
-        except Exception as e:
-            device_info = {"error": str(e)}
-
-        return {
-            "running": self.is_running,
-            "initialized": self._initialized,
-            "model": "sherpa-onnx-qwen3-asr-0.6b-int8",
-            "vad": "silero-vad",
-            "device": device_info
-        }
-
-    def _record_worker(self):
-        """Worker thread continuously reading raw PCM audio from microphone."""
-        samples_per_read = int(0.05 * self.sample_rate)  # 50ms chunks (800 samples)
-        try:
-            with sd.InputStream(channels=1, dtype="float32", samplerate=self.sample_rate) as stream:
-                while self.is_running:
-                    samples, overflow = stream.read(samples_per_read)
-                    if not self.is_running:
-                        break
-                    samples = samples.reshape(-1)
-                    # Adaptive Gain / Pre-amplification for soft microphones
-                    peak = float(np.max(np.abs(samples)))
-                    if 0.0005 < peak < 0.08:
-                        gain = min(8.0, 0.25 / (peak + 1e-5))
-                        samples = np.clip(samples * gain, -1.0, 1.0)
-                    self._audio_queue.put(np.copy(samples))
-        except Exception as e:
-            print(f"[AudioEngine] Recording stream error: {e}")
-
-    def _process_worker(self):
-        """Worker thread feeding audio into VAD and decoding utterances upon endpointing."""
-        window_size = 512  # 32ms window @ 16kHz
-        buffer = np.array([], dtype=np.float32)
-        offset = 0
-        started = False
-
-        while self.is_running:
-            try:
-                samples = self._audio_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-
-            buffer = np.concatenate([buffer, samples])
-
-            while offset + window_size <= len(buffer):
-                window = buffer[offset : offset + window_size]
-                self.vad.accept_waveform(window)
-                if not started and self.vad.is_speech_detected():
-                    started = True
-                offset += window_size
-
-            if not started:
-                # Keep rolling window of past 10 windows for speech onset context
-                if len(buffer) > 10 * window_size:
-                    excess = len(buffer) - 10 * window_size
-                    offset = max(0, offset - excess)
-                    buffer = buffer[-10 * window_size :]
-
-            # Check if VAD has completed an utterance segment
-            while not self.vad.empty():
-                segment = self.vad.front
-                samples_to_decode = segment.samples
-                self.vad.pop()
-
-                # Reset buffer and state for next utterance
-                buffer = np.array([], dtype=np.float32)
-                offset = 0
-                started = False
-
-                if len(samples_to_decode) > int(0.2 * self.sample_rate):
-                    stream = self.recognizer.create_stream()
-                    stream.accept_waveform(self.sample_rate, samples_to_decode)
-                    self.recognizer.decode_stream(stream)
-                    text = stream.result.text.strip()
-                    if text:
-                        print(f"[AudioEngine] Transcribed: \"{text}\"")
-                        for cb in list(self._callbacks):
-                            try:
-                                cb(text)
-                            except Exception as e:
-                                print(f"[AudioEngine] Callback error: {e}")
-
-    def start(self) -> bool:
-        """Starts microphone recording and processing threads."""
-        if self.is_running:
-            return True
-
-        if sd is None or sherpa_onnx is None:
-            print("[AudioEngine] Error: sounddevice or sherpa_onnx not installed.")
-            return False
-
-        try:
-            self._ensure_models_loaded()
-        except Exception as e:
-            print(f"[AudioEngine] Error loading models: {e}")
-            return False
-
-        self.is_running = True
-        self._audio_queue = queue.Queue()
-
-        # Reset VAD detector state
-        try:
-            self.vad.reset()
-            while not self.vad.empty():
-                self.vad.pop()
+            if sr is not None:
+                names = sr.Microphone.list_microphone_names()
+                if names:
+                    device_name = names[0]
         except Exception:
             pass
 
-        # Start background workers
-        self._record_thread = threading.Thread(target=self._record_worker, daemon=True)
-        self._process_thread = threading.Thread(target=self._process_worker, daemon=True)
-
-        self._record_thread.start()
-        self._process_thread.start()
-
-        print("[AudioEngine] Microphone recording active (Local Qwen3-ASR + Silero VAD).")
-        return True
-
-    def stop(self):
-        """Stops the audio stream and worker threads."""
-        if not self.is_running:
-            return
-
-        self.is_running = False
-
-        if self._record_thread and self._record_thread.is_alive():
-            self._record_thread.join(timeout=1.0)
-            self._record_thread = None
-
-        if self._process_thread and self._process_thread.is_alive():
-            self._process_thread.join(timeout=1.0)
-            self._process_thread = None
-
-        print("[AudioEngine] Microphone stopped.")
+        return {
+            "running": self.is_running,
+            "initialized": self._recognizer is not None,
+            "engine": "groq-whisper-turbo" if self.groq_api_key else "google-speech",
+            "device": device_name
+        }
 
 
 # Singleton instance
