@@ -1,7 +1,7 @@
 """
 IRIS Core: Native Autonomous Workflow Orchestrator
 Coordinates seamless cross-application workflows using LLM step decomposition,
-Win32 OS hooks, UIAutomation, and smart app-to-browser fallbacks with 0 vision token overhead.
+Win32 OS hooks, UIAutomation, DOM-first browser control, and verified vision fallbacks.
 """
 
 import os
@@ -9,35 +9,50 @@ import re
 import time
 import glob
 import json
-import pypdf
-import pyautogui
-import pyperclip
-import subprocess
+from urllib.parse import quote_plus
+from task_state import TaskState, transition_task_record
+from browser_automation import BrowserAction, PlaywrightCDPAdapter
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
+
+try:
+    import pyautogui
+except ImportError:
+    pyautogui = None
+
+try:
+    import pyperclip
+except ImportError:
+    pyperclip = None
 import win32gui
 import win32con
 
 import uia_engine
 import win32_engine
 
+browser_adapter_factory = PlaywrightCDPAdapter
+
 def decompose_command_with_llm(command: str) -> list[dict]:
     """
     Decomposes a complex natural language command into an ordered sequence of executable steps.
-    Uses Groq Llama text model with ultra-low latency (<150ms).
-    Falls back instantly to deterministic heuristic decomposition if LLM is unavailable.
+    Uses the OpenAI Responses API and falls back to deterministic local
+    decomposition when the API is unavailable.
     """
     cmd_clean = command.strip()
     for prefix in ["can you please ", "could you please ", "can you ", "could you ", "please ", "iris, ", "iris ", "i want you to ", "help me "]:
         if cmd_clean.lower().startswith(prefix):
             cmd_clean = cmd_clean[len(prefix):].strip()
 
-    # 1. Attempt Fast Groq Llama Decomposition (<150ms)
+    # 0. Attempt OpenAI API Decomposition (<200ms)
     try:
-        from groq import Groq
+        from openai import OpenAI
         from dotenv import load_dotenv
-        load_dotenv()
-        groq_key = os.environ.get("GROQ_API_KEY")
-        if groq_key:
-            client = Groq(api_key=groq_key)
+        load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'), override=True)
+        openai_key = os.environ.get("OPENAI_API_KEY")
+        if openai_key:
+            client = OpenAI(api_key=openai_key.strip(), timeout=5.0, max_retries=1)
             prompt = f"""You are the IRIS Autonomous Task Planner. Decompose this user request into discrete, sequential OS steps:
 "{cmd_clean}"
 
@@ -51,53 +66,44 @@ Supported actions:
 - "extract": Parse invoice PDFs and export structured table to Excel
 - "meta_os": Window tiling, split screen, dev layout, or zen mode
 
-Special Rules for Multi-App & Multi-Step Workflows:
-1. Multi-App Requests: If the user asks to open/launch multiple apps (e.g. "open vscode and spotify", "launch excel and calculator", "open chrome, discord and slack"), create a separate sequential "open" step for each distinct application.
-2. Cross-App Research & Notes: If the user asks to search/research a topic and summarize/take notes (e.g., "search react docs and summarize in notepad"), step 1 is "search" (browser) and step 2 is "summarize" (synthesize notes & display in editor). Do NOT add a redundant "open" step.
-3. YouTube & Video Requests: If the user asks to search and play/open a video (e.g. "open youtube, search dsa and click on the most popular video", "search python on youtube and play the first video"):
-   - Step 1: "action": "search", "target": "<search term>", "app": "youtube", "sort": "view_count" (if most popular / top), "description": "Searching YouTube for '<search term>'"
-   - Step 2: "action": "click", "target": "first video", "description": "Playing the top video result"
-4. Sequence of Operations: Always sequence from primary prerequisite to subsequent actions.
-
 Return ONLY a JSON array of step objects, no markdown formatting, no explanations:
 [
   {{"step": 1, "action": "open", "target": "vscode", "description": "Opening Visual Studio Code"}},
   {{"step": 2, "action": "open", "target": "spotify", "description": "Opening Spotify"}}
 ]"""
-            for model_name in [
-                "openai/gpt-oss-120b",
-                "openai/gpt-oss-20b",
-                "qwen/qwen3.6-27b",
-                "groq/compound",
-                "groq/compound-mini",
-                "llama-3.3-70b-versatile",
-                "llama-3.1-8b-instant"
-            ]:
-                try:
-                    chat_completion = client.chat.completions.create(
-                        messages=[
-                            {"role": "system", "content": "You are a precise task decomposition JSON generator. Output raw JSON arrays only."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        model=model_name,
-                        temperature=0.0,
-                        max_tokens=600,
-                        timeout=4.0
-                    )
-                    raw_text = chat_completion.choices[0].message.content.strip()
-                    raw_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL).strip()
-                    # Extract JSON array
-                    json_match = re.search(r'\[\s*\{.*\}\s*\]', raw_text, re.DOTALL)
-                    if json_match:
-                        parsed_steps = json.loads(json_match.group(0))
-                        if isinstance(parsed_steps, list) and len(parsed_steps) > 0:
-                            return parsed_steps
-                except Exception:
-                    continue
-    except Exception as ge:
-        print(f"[Planner] Groq decomposition note: {ge}")
+            step_schema = {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "step": {"type": "integer"},
+                        "action": {"type": "string", "enum": ["open", "search", "summarize", "type", "click", "close", "extract", "save", "meta_os"]},
+                        "target": {"type": "string"},
+                        "description": {"type": "string"},
+                        "app": {"type": "string"},
+                        "content": {"type": "string"},
+                        "sort": {"type": "string"},
+                    },
+                    "required": ["step", "action", "target", "description", "app", "content", "sort"],
+                    "additionalProperties": False,
+                },
+            }
+            response = client.responses.create(
+                model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+                instructions="Return one bounded, sequential plan using only the supported actions.",
+                input=prompt,
+                text={"format": {"type": "json_schema", "name": "workflow_steps", "schema": step_schema, "strict": True}},
+                max_output_tokens=600,
+                store=False,
+            )
+            parsed_steps = json.loads((response.output_text or "").strip())
+            if isinstance(parsed_steps, list) and len(parsed_steps) > 0:
+                return parsed_steps
+    except Exception as oae:
+        print(f"[Planner] OpenAI decomposition note: {oae}")
 
-    # 2. Resilient Deterministic Heuristic Decomposer (0ms, 100% Reliable Offline)
+    # A deterministic local planner is the only fallback; no secondary cloud
+    # provider receives user commands.
     return decompose_command_heuristic(cmd_clean)
 
 def decompose_command_heuristic(command: str) -> list[dict]:
@@ -170,6 +176,39 @@ def decompose_command_heuristic(command: str) -> list[dict]:
             }
         ]
 
+    # Case D0: YT Music / YouTube Music Search & Playback (e.g. "open chrome and search for yt music and play any music")
+    if any(k in cmd_lower for k in ["yt music", "ytmusic", "youtube music", "yt-music"]) or ("music" in cmd_lower and any(k in cmd_lower for k in ["play", "search", "listen", "song", "track"])):
+        query = cmd_lower
+        for p in [
+            "search for yt music and play ", "search for yt music and ", "search yt music for ", "open chrome and search for yt music and play ",
+            "open chrome and search for yt music and ", "open yt music and play ", "search for music ", "play music ", "search for ", "play "
+        ]:
+            if p in query:
+                query = query.split(p, 1)[1]
+                break
+
+        query_clean = re.sub(r'[\s,]+(?:and\s+)?(?:then\s+)?(?:play|listen|open|click)\b.*', '', query, flags=re.IGNORECASE)
+        query_clean = query_clean.replace("yt music", "").replace("youtube music", "").replace("chrome", "").replace("like stuff", "").replace("any music", "").replace("music", "").strip(" ,;:-.")
+
+        if not query_clean or len(query_clean) <= 1:
+            query_clean = "top hits music"
+
+        return [
+            {
+                "step": 1,
+                "action": "search",
+                "target": query_clean,
+                "app": "ytmusic",
+                "description": f"Searching YT Music for '{query_clean}'"
+            },
+            {
+                "step": 2,
+                "action": "click",
+                "target": "first song track",
+                "description": f"Playing '{query_clean}' on YT Music"
+            }
+        ]
+
     # Case D: YouTube Search + Play / Click Video (e.g. "open youtube, search dsa and click on the most popular video")
     if "youtube" in cmd_lower and any(k in cmd_lower for k in ["play", "click", "open the", "watch", "select", "first video", "popular", "top video"]):
         query = cmd_lower
@@ -238,9 +277,10 @@ def decompose_command_heuristic(command: str) -> list[dict]:
             if p in cmd_lower:
                 raw = command.split(p, 1)[1]
                 text_to_type = raw.replace(f"in {app_name}", "").replace(f"to {app_name}", "").replace(f"into {app_name}", "").strip(" \"'")
+                text_to_type = re.sub(r"\s+(?:and\s+then\s+|and\s+|then\s+)?save(?:\s+(?:it|the file))?.*$", "", text_to_type, flags=re.IGNORECASE).strip()
                 break
 
-        return [
+        steps = [
             {
                 "step": 1,
                 "action": "open",
@@ -255,6 +295,14 @@ def decompose_command_heuristic(command: str) -> list[dict]:
                 "description": f"Typing text into {app_name.title()}"
             }
         ]
+        if "save" in cmd_lower:
+            steps.append({
+                "step": 3,
+                "action": "save",
+                "target": app_name,
+                "description": f"Saving the content in {app_name.title()}",
+            })
+        return steps
 
     # Case F: Click action (e.g. "click Submit button", "click login")
     if any(k in cmd_lower for k in ["click", "press", "select", "tap", "hit"]):
@@ -316,84 +364,35 @@ def decompose_command_heuristic(command: str) -> list[dict]:
     return steps
 
 def generate_technical_summary(topic: str) -> str:
-    """
-    Generates structured, clean technical research documentation for a topic using fast text LLM / template.
-    """
-    topic_clean = topic.strip().title()
-    try:
-        from groq import Groq
-        from dotenv import load_dotenv
-        load_dotenv()
-        groq_key = os.environ.get("GROQ_API_KEY")
-        if groq_key:
-            client = Groq(api_key=groq_key)
-            prompt = f"""Synthesize comprehensive, clean, structured documentation notes for: "{topic_clean}".
-Include:
-1. Executive Architecture Overview
-2. Key Core Features & Advantages (Bullet points)
-3. Essential Quickstart Code Snippet / Configuration
-4. Production Best Practices & Documentation References
+    """Collect real pages and return only a citation-validated synthesis."""
+    from research_service import EvidenceResearchService
 
-Output plain readable text ready for Notepad (no markdown code fence blocks)."""
-            for model_name in [
-                "openai/gpt-oss-120b",
-                "openai/gpt-oss-20b",
-                "qwen/qwen3.6-27b",
-                "groq/compound",
-                "groq/compound-mini",
-                "llama-3.3-70b-versatile"
-            ]:
-                try:
-                    resp = client.chat.completions.create(
-                        messages=[{"role": "user", "content": prompt}],
-                        model=model_name,
-                        temperature=0.2,
-                        max_tokens=800,
-                        timeout=5.0
-                    )
-                    content = resp.choices[0].message.content.strip()
-                    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-                    if len(content) > 100:
-                        return content
-                except Exception:
-                    continue
-    except Exception as e:
-        print(f"[Summary] Fast synthesis note: {e}")
-
-    # High-quality dynamic fallback template
-    return f"""=== {topic_clean.upper()} OFFICIAL DOCUMENTATION & RESEARCH NOTES ===
-Topic: {topic_clean}
-Generated by: IRIS Autonomous OS Engine
-Timestamp: {time.strftime("%Y-%m-%d %H:%M:%S")}
-
-1. Executive Overview:
-{topic_clean} is a modern, high-performance software technology widely adopted for production-grade scalability, developer ergonomics, and rich standard ecosystem integration.
-
-2. Core Architectural Features:
-- Native Asynchronous Execution & High Throughput Concurrency
-- Intuitive, strongly-typed API structure and data validation
-- Modular plugin architecture with minimal boilerplate
-- Enterprise-ready security, serialization, and observability
-
-3. Quickstart Implementation Snippet:
-# {topic_clean} Standard Implementation Example
-def init_service():
-    print("Initializing {topic_clean} service runtime...")
-    config = {{"service": "{topic_clean}", "status": "operational", "version": "latest"}}
-    return config
-
-if __name__ == "__main__":
-    app_config = init_service()
-    print("Ready:", app_config)
-
-4. Official References:
-- Search Documentation: https://www.google.com/search?q={topic.replace(' ', '+')}+official+documentation
-"""
+    result = EvidenceResearchService().research(topic.strip(), max_sources=4)
+    if result.status != "success":
+        raise RuntimeError(result.error or "Research did not pass citation validation.")
+    return result.report
 
 def execute_cross_app_workflow(task_id: str, command: str, active_watchers: dict = None, log_callback = None) -> bool:
     """
     Executes cross-app commands by decomposing into steps and running deterministic OS handlers.
     """
+    browser_adapter = None
+
+    def get_browser_adapter():
+        nonlocal browser_adapter
+        if browser_adapter is None:
+            browser_adapter = browser_adapter_factory()
+        return browser_adapter
+
+    def close_browser_adapter():
+        nonlocal browser_adapter
+        if browser_adapter is not None:
+            try:
+                browser_adapter.close()
+            except Exception:
+                pass
+            browser_adapter = None
+
     def log(msg: str):
         if log_callback:
             try:
@@ -424,15 +423,182 @@ def execute_cross_app_workflow(task_id: str, command: str, active_watchers: dict
             else:
                 active_watchers[task_id]["current_action"] = thought
 
+    def fail_workflow(message: str) -> bool:
+        close_browser_adapter()
+        log(f"Workflow failed: {message}")
+        if active_watchers and task_id in active_watchers:
+            active_watchers[task_id]["thought"] = message
+            active_watchers[task_id]["current_action"] = "Task stopped."
+            transition_task_record(
+                active_watchers[task_id],
+                TaskState.FAILED,
+                current_step="Task stopped",
+                error_code="workflow_action_failed",
+                error_details=message,
+            )
+        return False
+
+    def click_media_result_and_start_playback() -> bool:
+        """Use OpenAI visual grounding to select a media result and start playback."""
+        if pyautogui is None:
+            log("Playback skipped: pyautogui is not available.")
+            return False
+
+        try:
+            from vision_grounding import detect_element_with_vlm_vision, verify_screen_state_with_vlm
+        except Exception as exc:
+            log(f"AI vision module unavailable: {exc}")
+            return False
+
+        def ground_and_click(description: str) -> bool:
+            log(f"Asking OpenAI Vision to locate: {description}")
+            element = detect_element_with_vlm_vision(description)
+            if not element or element.get("source") != "OpenAI_VLM_Vision":
+                log(f"AI vision could not locate: {description}")
+                return False
+            x = element.get("center_x")
+            y = element.get("center_y")
+            if not isinstance(x, int) or not isinstance(y, int):
+                log(f"AI vision returned invalid coordinates for: {description}")
+                return False
+            pyautogui.moveTo(x, y, duration=0.2)
+            pyautogui.click(x, y)
+            log(f"AI vision clicked '{description}' at ({x}, {y}).")
+            return True
+
+        def playback_is_verified() -> bool:
+            verdict = verify_screen_state_with_vlm(
+                "media playback is visibly active in YouTube or YouTube Music, supported by a pause control, active player, moving progress state, or now-playing bar"
+            )
+            log(
+                "Playback verification: "
+                f"verified={verdict.get('verified')} confidence={verdict.get('confidence')} "
+                f"evidence={verdict.get('evidence')}"
+            )
+            return bool(verdict.get("verified"))
+
+        try:
+            adapter = get_browser_adapter()
+            before = adapter.capture()
+            for semantic_target in ("Play", "first song", "first video"):
+                dom_result = adapter.act_dom(BrowserAction("click", target=semantic_target), 6.0)
+                if not dom_result.success:
+                    continue
+                after = adapter.capture()
+                if after.fingerprint != before.fingerprint and playback_is_verified():
+                    log(f"DOM-first browser control started playback using '{semantic_target}'.")
+                    return True
+        except Exception as exc:
+            log(f"DOM-first playback targeting note: {exc}")
+
+        def wait_for_playback_verification(attempts: int = 2) -> bool:
+            for _ in range(attempts):
+                time.sleep(2.5)
+                if playback_is_verified():
+                    return True
+            return False
+
+        def click_accessible_play_control() -> bool:
+            """Use Chrome's accessibility tree for exact invocation after vision confirms context."""
+            try:
+                foreground = uia_engine.get_foreground_window_control()
+                controls = uia_engine.dump_actionable_controls(foreground, max_elements=1000)
+                screen_width, screen_height = pyautogui.size()
+                candidates = []
+                for item in controls:
+                    name = str(item.get("name") or "").strip().lower()
+                    rect = item.get("rect")
+                    if item.get("type") != "Button" or not rect or not name.startswith("play"):
+                        continue
+                    if rect.right <= screen_width * 0.2 or rect.bottom <= 100 or rect.top >= screen_height:
+                        continue
+                    priority = 0 if name == "play" else 1
+                    candidates.append((priority, rect.top, rect.left, item))
+                if not candidates:
+                    return False
+                candidates.sort(key=lambda candidate: candidate[:3])
+                selected = candidates[0][3]
+                if uia_engine.invoke_control(selected["control"]):
+                    log(f"Accessibility precision layer invoked '{selected['name']}'.")
+                    return True
+            except Exception as exc:
+                log(f"Accessibility precision layer note: {exc}")
+            return False
+
+        # Give the browser time to render dynamic search results before capturing.
+        time.sleep(3.0)
+        if ground_and_click(
+            "the Close, Dismiss, Not now, or OK button on a blocking system dialog or modal overlay that obscures the webpage; return not found if no blocking dialog exists"
+        ):
+            log("Dismissed a blocking dialog before media selection.")
+            time.sleep(1.0)
+
+        page_verdict = verify_screen_state_with_vlm(
+            "YouTube or YouTube Music search results or a media detail page are visible and ready for a Play action"
+        )
+        if page_verdict.get("verified") and click_accessible_play_control():
+            if wait_for_playback_verification():
+                return True
+
+        target_descriptions = [
+            "the first individual playable song or video result in the main search results, excluding navigation, filters, ads, playlists, and sidebars",
+            "the Play button belonging to the first visible song, video, or top-result card in the main results area",
+            "the first visible song title or video thumbnail that can be clicked to begin playback",
+        ]
+
+        for description in target_descriptions:
+            if not ground_and_click(description):
+                continue
+            if wait_for_playback_verification():
+                return True
+
+            # Search results often open an album/radio/playlist page first. Re-ground
+            # the newly rendered page and click its primary play control.
+            if ground_and_click(
+                "the large primary circular Play button for the currently open album, playlist, radio station, or media page; exclude small thumbnail overlays"
+            ):
+                if wait_for_playback_verification():
+                    return True
+
+        log("OpenAI Vision could not verify active media playback after all click attempts.")
+        return False
+
     log(f"Workflow Engine received command: '{command}'")
     update_status("🧠 Step 1/X: Analyzing command and decomposing tasks...", "Planning steps...")
 
     # 1. Decompose command into sequential steps
     steps = decompose_command_with_llm(command)
+
+    # LLM plans are advisory; enforce required follow-up actions for commands
+    # whose intent explicitly includes playback. This prevents a valid search
+    # plan from silently ending before the media interaction step.
+    command_lower = command.lower()
+    wants_music = (
+        any(term in command_lower for term in ["yt music", "ytmusic", "youtube music"])
+        or ("music" in command_lower and any(term in command_lower for term in ["play", "listen", "song", "track"]))
+    )
+    wants_video = "youtube" in command_lower and any(
+        term in command_lower for term in ["play", "watch", "click", "video", "select"]
+    )
+    has_click_step = any(str(step.get("action", "")).lower() == "click" for step in steps)
+    if (wants_music or wants_video) and not has_click_step:
+        target = "first song track" if wants_music else "first video"
+        steps.append({
+            "step": len(steps) + 1,
+            "action": "click",
+            "target": target,
+            "description": "Starting playback with AI vision"
+        })
+        log("Planner validation appended the missing playback click step.")
+
+    for step_number, step in enumerate(steps, 1):
+        step["step"] = step_number
     total_steps = len(steps)
     log(f"Decomposed into {total_steps} discrete steps: {json.dumps(steps)}")
 
     opened_apps = set()
+    media_playback_verified = False
+    artifacts_persisted = False
 
     for idx, step_info in enumerate(steps, 1):
         action = step_info.get("action", "open").lower()
@@ -442,7 +608,7 @@ def execute_cross_app_workflow(task_id: str, command: str, active_watchers: dict
         # Stream live thought badge
         emoji_map = {
             "open": "🚀", "search": "🌐", "summarize": "⚡", "type": "✍️",
-            "click": "🎯", "close": "🛑", "extract": "📊", "meta_os": "🪟"
+            "click": "🎯", "close": "🛑", "extract": "📊", "save": "💾", "meta_os": "🪟"
         }
         emoji = emoji_map.get(action, "⚡")
         update_status(f"{emoji} Step {idx}/{total_steps}: {desc}", desc)
@@ -458,31 +624,50 @@ def execute_cross_app_workflow(task_id: str, command: str, active_watchers: dict
             else:
                 res = win32_engine.resolve_and_open_app(target, thought_callback=lambda msg: update_status(f"🚀 Step {idx}/{total_steps}: {msg}"))
                 log(f"Open result for '{target}': {res.get('details')}")
+                if not res.get("success"):
+                    return fail_workflow(f"Could not open or focus '{target}'.")
                 opened_apps.add(target)
             time.sleep(0.4)
 
         # -------------------------------------------------------------
-        # Action Handler: SEARCH (Web / Documentation / YouTube Search)
+        # Action Handler: SEARCH (Web / Documentation / YouTube / YT Music Search)
         # -------------------------------------------------------------
         elif action == "search":
             query = target
-            if "youtube" in step_info.get("app", "").lower() or "youtube" in query.lower():
+            app_target = step_info.get("app", "").lower()
+            if "ytmusic" in app_target or "yt music" in query.lower() or "youtube music" in query.lower() or "yt music" in command_lower or "youtube music" in command_lower:
+                clean_q = re.sub(r'\b(?:yt\s*music|youtube\s*music)\b', '', query, flags=re.IGNORECASE).strip(" ,;:-.")
+                if not clean_q:
+                    clean_q = "top hits music"
+                url = f"https://music.youtube.com/search?q={quote_plus(clean_q)}"
+            elif "youtube" in app_target or "youtube" in query.lower():
                 sort_param = step_info.get("sort", "")
                 if sort_param == "view_count" or any(k in query.lower() for k in ["popular", "views", "most viewed"]):
                     clean_q = re.sub(r'\b(?:popular|most\s+viewed|top)\b', '', query, flags=re.IGNORECASE).strip()
-                    url = f"https://www.youtube.com/results?search_query={clean_q.replace(' ', '+')}&sp=CAMSAhAB"
+                    url = f"https://www.youtube.com/results?search_query={quote_plus(clean_q)}&sp=CAMSAhAB"
                 else:
-                    url = f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}"
+                    url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
             elif "docs" in query.lower() or "documentation" in query.lower():
-                url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+                url = f"https://www.google.com/search?q={quote_plus(query)}"
             else:
-                url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+                url = f"https://www.google.com/search?q={quote_plus(query)}"
 
-            # Check if browser already open, else launch
-            subprocess.Popen(f'start "" "{url}"', shell=True)
+            # Use Playwright/CDP first so later actions can target the live DOM.
+            try:
+                navigation = get_browser_adapter().act_dom(BrowserAction("navigate", value=url), 10.0)
+            except Exception as exc:
+                navigation = None
+                log(f"DOM browser navigation note: {exc}")
+            if not navigation or not navigation.success:
+                # Structured Windows URL launch remains a fallback when CDP is unavailable.
+                os.startfile(url)
+            else:
+                observed = get_browser_adapter().capture()
+                if url.split("?", 1)[0] not in observed.url:
+                    return fail_workflow(f"Browser navigation to '{url}' could not be verified.")
             opened_apps.add("browser")
             opened_apps.add("chrome")
-            time.sleep(0.5)
+            time.sleep(1.0)
 
         # -------------------------------------------------------------
         # Action Handler: SUMMARIZE (Research Notes Synthesis)
@@ -490,7 +675,6 @@ def execute_cross_app_workflow(task_id: str, command: str, active_watchers: dict
         elif action == "summarize":
             topic = step_info.get("topic", target)
             summary_text = generate_technical_summary(topic)
-            
             clean_fname = re.sub(r'[^a-zA-Z0-9_]', '', topic.lower().replace(' ', '_'))
             notes_filename = f"{clean_fname}_notes.txt" if clean_fname else "research_notes.txt"
             notes_path = os.path.abspath(notes_filename)
@@ -511,45 +695,76 @@ def execute_cross_app_workflow(task_id: str, command: str, active_watchers: dict
             target_app = target or "notepad"
             hwnd = win32_engine.launch_or_focus_app(target_app)
             time.sleep(0.3)
-            if content:
-                win32_engine.inject_clipboard_text(content, press_enter=True, target_hwnd=hwnd)
+            if not hwnd:
+                return fail_workflow(f"Could not focus '{target_app}' for text entry.")
+            if content and not win32_engine.inject_clipboard_text(content, press_enter=True, target_hwnd=hwnd):
+                return fail_workflow(f"Text entry into '{target_app}' failed.")
             time.sleep(0.3)
 
         # -------------------------------------------------------------
-        # Action Handler: CLICK (UIA First -> Localized OCR Fallback)
+        # Action Handler: CLICK (OpenAI VLM Vision + UIA Grounding)
         # -------------------------------------------------------------
         elif action == "click":
             target_lower = target.lower()
             clicked = False
+            browser_before = None
+            browser_adapter = None
 
-            # If target is playing/clicking a video result on YouTube/Web
-            if any(k in target_lower for k in ["video", "first video", "popular video", "top video", "result", "play"]):
-                update_status(f"🎯 Step {idx}/{total_steps}: Launching top video result...", "Playing video...")
-                time.sleep(1.8) # Wait for web results to settle
-                screen_w, screen_h = pyautogui.size()
-                # YouTube first search result card position is center-left
-                click_x = int(screen_w * 0.38)
-                click_y = int(screen_h * 0.36)
-                pyautogui.click(click_x, click_y)
-                log(f"Auto-clicked top video result at screen coordinates ({click_x}, {click_y})")
-                clicked = True
+            is_media = any(k in target_lower for k in ["video", "song", "track", "music", "first video", "popular video", "top video", "result", "play"])
+            if is_media:
+                if media_playback_verified:
+                    log(f"Skipping duplicate media step '{target}' because playback is already verified.")
+                    clicked = True
+                else:
+                    update_status(f"🎯 Step {idx}/{total_steps}: Locating media controls with OpenAI Vision...", "Playing music/video...")
+                    clicked = click_media_result_and_start_playback()
+                    media_playback_verified = clicked
             else:
-                fg_ctrl = uia_engine.get_foreground_window_control()
-                if fg_ctrl:
-                    matched = uia_engine.find_control_by_intent(fg_ctrl, target)
-                    if matched:
-                        clicked = uia_engine.invoke_control(matched["control"])
-                
+                update_status(f"👁️ Step {idx}/{total_steps}: Grounding UI element '{target}' with OpenAI Vision...", f"Locating '{target}'...")
+                try:
+                    browser_adapter = get_browser_adapter()
+                    browser_before = browser_adapter.capture()
+                    dom_result = browser_adapter.act_dom(BrowserAction("click", target=target), 6.0)
+                    if dom_result.success:
+                        after = browser_adapter.capture()
+                        clicked = after.fingerprint != browser_before.fingerprint
+                        if clicked:
+                            log(f"DOM-first browser control clicked '{target}' and verified a page change.")
+                except Exception as browser_exc:
+                    log(f"DOM targeting note: {browser_exc}")
+                try:
+                    if not clicked:
+                        import vision_grounding
+                        g_res = vision_grounding.detect_element_with_vlm_vision(target)
+                        if g_res and g_res.get("center_x") is not None and g_res.get("center_y") is not None:
+                            cx, cy = g_res["center_x"], g_res["center_y"]
+                            log(f"OpenAI Vision located '{target}' at ({cx}, {cy})")
+                            pyautogui.click(cx, cy)
+                            time.sleep(0.35)
+                            if browser_adapter is not None and browser_before is not None:
+                                clicked = browser_adapter.capture().fingerprint != browser_before.fingerprint
+                            if not clicked:
+                                verdict = vision_grounding.verify_screen_state_with_vlm(
+                                    f"the interface visibly reflects that the user activated '{target}'"
+                                )
+                                clicked = bool(verdict.get("verified"))
+                except Exception as ve:
+                    log(f"Vision grounding note: {ve}")
+
                 if not clicked:
-                    # Localized OCR fallback
-                    try:
-                        import ocr_engine
-                        ocr_match = ocr_engine.find_text_coordinates(target)
-                        if ocr_match:
-                            pyautogui.click(ocr_match["cx"], ocr_match["cy"])
-                            clicked = True
-                    except Exception as oe:
-                        log(f"OCR click note: {oe}")
+                    fg_ctrl = uia_engine.get_foreground_window_control()
+                    if fg_ctrl:
+                        matched = uia_engine.find_control_by_intent(fg_ctrl, target)
+                        if matched:
+                            clicked = uia_engine.invoke_control(matched["control"])
+                            if clicked:
+                                import vision_grounding
+                                verdict = vision_grounding.verify_screen_state_with_vlm(
+                                    f"the interface visibly reflects that the user activated '{target}'"
+                                )
+                                clicked = bool(verdict.get("verified"))
+            if not clicked:
+                return fail_workflow(f"Could not locate or verify the requested UI target '{target}' with AI vision.")
             time.sleep(0.3)
 
         # -------------------------------------------------------------
@@ -557,21 +772,24 @@ def execute_cross_app_workflow(task_id: str, command: str, active_watchers: dict
         # -------------------------------------------------------------
         elif action == "close":
             hwnd = win32_engine.find_window_by_name(target, must_be_visible=True)
-            if hwnd:
-                win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+            if not hwnd:
+                return fail_workflow(f"Could not find an open '{target}' window to close.")
+            win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
             time.sleep(0.3)
 
         # -------------------------------------------------------------
         # Action Handler: EXTRACT (Batch PDF to Excel from Active Screen Folder)
         # -------------------------------------------------------------
         elif action == "extract":
+            if pypdf is None:
+                return fail_workflow("PDF extraction requires the pypdf dependency.")
             pdf_files, source_desc = win32_engine.get_active_screen_pdf_files()
             log(f"Dynamic screen discovery located {len(pdf_files)} PDF files in: {source_desc}")
 
             if not pdf_files:
                 update_status(f"⚠️ No PDF invoices found in open window or workspace.", "No files found.")
                 log("No PDF files found to extract.")
-                continue
+                return fail_workflow("No PDF files were found in the selected or active folder.")
 
             update_status(f"⚡ Step {idx}/{total_steps}: Found {len(pdf_files)} invoices in {source_desc}. Extracting data...", "Parsing invoices...")
 
@@ -603,9 +821,30 @@ def execute_cross_app_workflow(task_id: str, command: str, active_watchers: dict
 
             if extracted_data:
                 headers = ["Invoice #", "Date", "Company", "Amount"]
-                win32_engine.inject_excel_table(extracted_data, headers=headers)
+                if not win32_engine.inject_excel_table(extracted_data, headers=headers):
+                    return fail_workflow("Invoice data was extracted, but writing it to Excel failed.")
+                artifacts_persisted = True
                 log(f"Extracted {len(extracted_data)} invoices into Excel from {source_desc}.")
                 update_status(f"✨ Populated Excel with {len(extracted_data)} invoices from {source_desc}!", "Done.")
+            else:
+                return fail_workflow("The selected PDF files did not contain extractable invoice data.")
+
+        # -------------------------------------------------------------
+        # Action Handler: SAVE
+        # -------------------------------------------------------------
+        elif action == "save":
+            if artifacts_persisted:
+                log("Generated artifact is already saved; no additional save action is needed.")
+            else:
+                hwnd = win32_engine.find_window_by_name(target, must_be_visible=True)
+                if not hwnd:
+                    return fail_workflow(f"Could not find an open '{target}' window to save.")
+                win32_engine.bring_window_to_front(hwnd)
+                if pyautogui is None:
+                    return fail_workflow("Saving requires desktop keyboard automation, which is unavailable.")
+                pyautogui.hotkey("ctrl", "s")
+                log(f"Sent Save command to '{target}'.")
+                time.sleep(0.3)
 
         # -------------------------------------------------------------
         # Action Handler: META_OS (Workspace Layout)
@@ -613,16 +852,20 @@ def execute_cross_app_workflow(task_id: str, command: str, active_watchers: dict
         elif action == "meta_os":
             try:
                 import meta_os
-                meta_os.meta_engine.smart_arrange_workspace(command)
+                layout_result = meta_os.meta_engine.smart_arrange_workspace(command)
+                if isinstance(layout_result, dict) and layout_result.get("status") == "error":
+                    return fail_workflow(layout_result.get("message", "Workspace arrangement failed."))
             except Exception as me:
-                log(f"Meta-OS layout error: {me}")
+                return fail_workflow(f"Workspace arrangement failed: {me}")
+
+        else:
+            return fail_workflow(f"Unsupported workflow action '{action}'.")
 
     # Mark complete
     final_msg = f"✨ Completed {total_steps} step{'s' if total_steps != 1 else ''} successfully!"
     update_status(final_msg, "Finished")
     if active_watchers and task_id in active_watchers:
-        active_watchers[task_id]["status"] = "Success"
-        active_watchers[task_id]["active"] = False
-        active_watchers[task_id]["completed_at"] = time.time()
         active_watchers[task_id]["thought"] = final_msg
+        transition_task_record(active_watchers[task_id], TaskState.SUCCESS, current_step="Finished")
+    close_browser_adapter()
     return True

@@ -459,7 +459,7 @@ Analyze the user's intent and output a JSON object with:
 }}
 Output ONLY the JSON.
 """
-            resp = watcher.call_llm_with_retry('llama-3.3-70b-versatile', [prompt], "meta_os_reasoner")
+            resp = watcher.call_llm_with_retry('openai', [prompt], "meta_os_reasoner")
             m = re.search(r'\{.*\}', resp.text, re.DOTALL)
             if m:
                 parsed = json.loads(m.group(0))

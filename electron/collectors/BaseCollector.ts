@@ -1,4 +1,4 @@
-import { CollectorCapabilities, CollectorSource } from '../../shared/types';
+import { CollectorCapabilities, CollectorSource } from '../shared/types';
 import { EventBus } from '../engine/EventBus';
 
 export abstract class BaseCollector {

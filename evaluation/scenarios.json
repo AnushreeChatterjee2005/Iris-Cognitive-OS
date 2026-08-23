@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "planner_scenarios": [
+    {
+      "id": "media-playback",
+      "command": "Open Chrome, search YouTube Music for top hits, and play the first song",
+      "expected_actions": ["search", "click"],
+      "success_evidence": "Visible active player, pause control, progress state, or now-playing bar"
+    },
+    {
+      "id": "write-and-save",
+      "command": "Open Notepad and type Hackathon demo ready and save it",
+      "expected_actions": ["open", "type", "save"],
+      "success_evidence": "Target application contains the requested text and save completes"
+    }
+  ],
+  "routing_scenarios": [
+    {
+      "id": "parallel-research",
+      "command": "Research the best local AI frameworks in the background",
+      "expected_route": "parallel_desktop"
+    },
+    {
+      "id": "sensitive-confirmation",
+      "command": "Delete my account",
+      "expected_route": "confirmation_required"
+    }
+  ],
+  "watch_scenarios": [
+    {
+      "id": "visual-trigger",
+      "command": "when you see Download complete, then open the file",
+      "expected_condition": "Download complete",
+      "expected_action": "open the file"
+    }
+  ]
+}

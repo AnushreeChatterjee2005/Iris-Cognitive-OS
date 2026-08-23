@@ -1,11 +1,11 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, screen } from 'electron';
+import { app, BrowserWindow, globalShortcut, ipcMain, screen, session } from 'electron';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { ActivityEngine } from './engine/ActivityEngine';
 import { ActivityStore } from './store/ActivityStore';
 import { EventBus } from './engine/EventBus';
-import { IntentParser } from './ai/intentParser';
-import { exec } from 'child_process';
+import { authenticatedBackendFetch, readLaunchToken } from './backendClient';
+import { BACKEND_URL, DEV_RENDERER_ORIGIN } from './config';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -18,8 +18,46 @@ let hasPipelines = false;
 let engine: ActivityEngine | null = null;
 let store: ActivityStore | null = null;
 
+function isTrustedRendererUrl(rawUrl: string): boolean {
+  try {
+    const url = new URL(rawUrl);
+    if (!app.isPackaged) return url.origin === DEV_RENDERER_ORIGIN;
+    if (url.protocol !== 'file:') return false;
+    const rendererPath = path.resolve(fileURLToPath(url));
+    const distRoot = path.resolve(__dirname, '../dist');
+    return rendererPath === distRoot || rendererPath.startsWith(`${distRoot}${path.sep}`);
+  } catch {
+    return false;
+  }
+}
+
+function isTrustedSender(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean {
+  return !event.sender.isDestroyed() && isTrustedRendererUrl(event.sender.getURL());
+}
+
+function protectWindow(window: BrowserWindow): void {
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', (event, targetUrl) => {
+    if (!isTrustedRendererUrl(targetUrl)) event.preventDefault();
+  });
+}
+
 // Suppress AMD GPU DirectComposition errors in terminal
 app.disableHardwareAcceleration();
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    const window = searchWindow || dashboardWindow;
+    if (window) {
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    }
+  });
+}
 
 function createDashboardWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
@@ -38,14 +76,16 @@ function createDashboardWindow() {
       preload: path.join(__dirname, 'preload.mjs'),
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
     },
   });
+  protectWindow(dashboardWindow);
 
   // Keep dashboard as a normal 'always-on-top' window
   dashboardWindow.setAlwaysOnTop(true, 'floating');
 
   if (!app.isPackaged) {
-    dashboardWindow.loadURL('http://localhost:5173/#/');
+    dashboardWindow.loadURL(`${DEV_RENDERER_ORIGIN}/#/`);
   } else {
     dashboardWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/' });
   }
@@ -99,15 +139,18 @@ function createBlobWindow() {
       preload: path.join(__dirname, 'preload.mjs'),
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
     },
   });
+
+  protectWindow(blobWindow);
 
   // Elevate the blob to the absolute highest interactive Z-order level so it's NEVER covered by the dashboard
   blobWindow.setAlwaysOnTop(true, 'pop-up-menu');
   blobWindow.setIgnoreMouseEvents(true, { forward: true });
 
   if (!app.isPackaged) {
-    blobWindow.loadURL('http://localhost:5173/#/blob');
+    blobWindow.loadURL(`${DEV_RENDERER_ORIGIN}/#/blob`);
   } else {
     blobWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/blob' });
   }
@@ -133,15 +176,18 @@ function createOverlayWindow() {
     movable: false,
     resizable: false,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
+      preload: path.join(__dirname, 'preload.mjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
     }
   });
 
+  protectWindow(overlayWindow);
   overlayWindow.setIgnoreMouseEvents(true, { forward: true });
 
   if (!app.isPackaged) {
-    overlayWindow.loadURL('http://localhost:5173/overlay.html');
+    overlayWindow.loadURL(`${DEV_RENDERER_ORIGIN}/overlay.html`);
   } else {
     overlayWindow.loadFile(path.join(__dirname, '../dist/overlay.html'));
   }
@@ -164,15 +210,17 @@ function createSearchWindow() {
       preload: path.join(__dirname, 'preload.mjs'),
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
     },
   });
 
   if (!app.isPackaged) {
-    searchWindow.loadURL('http://localhost:5173/#/search');
+    searchWindow.loadURL(`${DEV_RENDERER_ORIGIN}/#/search`);
   } else {
     searchWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/search' });
   }
 
+  protectWindow(searchWindow);
   searchWindow.on('blur', () => {
     if (ignoreBlur) return;
     searchWindow?.webContents.executeJavaScript(`window.dispatchEvent(new Event('electron-window-hidden'))`).catch(console.error);
@@ -193,17 +241,11 @@ function createSearchWindow() {
 }
 
 app.whenReady().then(async () => {
-  const { session } = require('electron');
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === 'media') {
-      callback(true);
-    } else {
-      callback(false);
-    }
+    callback(permission === 'media' && isTrustedRendererUrl(webContents.getURL()));
   });
-  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
-    if (permission === 'media') return true;
-    return false;
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    return permission === 'media' && Boolean(webContents) && isTrustedRendererUrl(webContents.getURL());
   });
 
   createDashboardWindow();
@@ -221,7 +263,7 @@ app.whenReady().then(async () => {
     // Trigger designated startup workspace layout if configured
     setTimeout(async () => {
       try {
-        await fetch('http://127.0.0.1:8000/api/workspaces/startup/trigger', { method: 'POST' });
+        await authenticatedBackendFetch(`${BACKEND_URL}/api/workspaces/startup/trigger`, { method: 'POST' });
       } catch (e) {
         // Backend still initializing or no startup workspace
       }
@@ -260,25 +302,27 @@ app.whenReady().then(async () => {
   });
 
   // Register Ctrl+K global shortcut
-  const ret = globalShortcut.register('CommandOrControl+K', () => {
+  const toggleIrisWindow = () => {
     if (searchWindow) {
       if (searchWindow.isVisible()) {
-        searchWindow.webContents.executeJavaScript(`window.dispatchEvent(new Event('electron-window-hidden'))`).catch(console.error);
-        if (!hasPipelines) {
-          setTimeout(() => { searchWindow?.hide(); }, 50);
-        } else {
-          // If pipelines exist, we keep the window visible but make it click-through (handled by React)
-        }
+        searchWindow.webContents.executeJavaScript(`window.dispatchEvent(new CustomEvent('toggle-chat'))`).catch(console.error);
       } else {
         searchWindow.show();
         searchWindow.focus();
         searchWindow.webContents.executeJavaScript(`window.dispatchEvent(new Event('electron-window-shown'))`).catch(console.error);
+        setTimeout(() => {
+          searchWindow?.webContents.executeJavaScript(`window.dispatchEvent(new CustomEvent('toggle-chat'))`).catch(console.error);
+        }, 100);
       }
     }
-  });
+  };
 
-  if (!ret) {
-    console.log('registration failed');
+  const ret1 = globalShortcut.register('CommandOrControl+K', toggleIrisWindow);
+  const ret2 = globalShortcut.register('CommandOrControl+Shift+K', toggleIrisWindow);
+  const ret3 = globalShortcut.register('Alt+Shift+K', toggleIrisWindow);
+
+  if (!ret1 && !ret2 && !ret3) {
+    console.log('Global shortcut registration note: Ctrl+K encountered system shortcut conflict.');
   }
 
   app.on('activate', () => {
@@ -301,7 +345,13 @@ app.on('will-quit', () => {
   if (store) store.close();
 });
 
-ipcMain.on('hide-window', () => {
+ipcMain.handle('get-launch-token', async (event) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  return readLaunchToken();
+});
+
+ipcMain.on('hide-window', (event) => {
+  if (!isTrustedSender(event)) return;
   if (searchWindow && !hasPipelines) {
     searchWindow.hide();
   }
@@ -310,6 +360,7 @@ ipcMain.on('hide-window', () => {
 let isDashboardOpen = false;
 
 ipcMain.on('toggle-dashboard', (event, coords) => {
+  if (!isTrustedSender(event)) return;
   if (dashboardWindow) {
     if (isDashboardOpen) {
       isDashboardOpen = false;
@@ -325,7 +376,8 @@ ipcMain.on('toggle-dashboard', (event, coords) => {
   }
 });
 
-ipcMain.on('close-dashboard', () => {
+ipcMain.on('close-dashboard', (event) => {
+  if (!isTrustedSender(event)) return;
   if (dashboardWindow && isDashboardOpen) {
     isDashboardOpen = false;
     dashboardWindow.setIgnoreMouseEvents(true, { forward: true });
@@ -336,17 +388,19 @@ ipcMain.on('close-dashboard', () => {
 // Removed ready-to-show-dashboard listener since it was redundantly calling focus() and causing OS stutter
 
 ipcMain.on('set-has-pipelines', (event, val) => {
-  hasPipelines = val;
+  if (isTrustedSender(event)) hasPipelines = Boolean(val);
 });
 
 ipcMain.on('set-click-through', (event, ignore) => {
+  if (!isTrustedSender(event)) return;
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win) {
     win.setIgnoreMouseEvents(ignore, { forward: true });
   }
 });
 
-ipcMain.on('enable-blob-focus', () => {
+ipcMain.on('enable-blob-focus', (event) => {
+  if (!isTrustedSender(event)) return;
   if (blobWindow) {
     blobWindow.setFocusable(true);
     blobWindow.setIgnoreMouseEvents(false);
@@ -354,7 +408,8 @@ ipcMain.on('enable-blob-focus', () => {
   }
 });
 
-ipcMain.on('disable-blob-focus', () => {
+ipcMain.on('disable-blob-focus', (event) => {
+  if (!isTrustedSender(event)) return;
   if (blobWindow) {
     blobWindow.setFocusable(false);
     blobWindow.setIgnoreMouseEvents(true, { forward: true });
@@ -362,12 +417,23 @@ ipcMain.on('disable-blob-focus', () => {
 });
 
 ipcMain.on('set-ignore-blur', (event, ignore) => {
-  ignoreBlur = ignore;
+  if (isTrustedSender(event)) ignoreBlur = Boolean(ignore);
+});
+
+ipcMain.on('overlay:set-ignore-mouse', (event, ignore: boolean) => {
+  if (isTrustedSender(event) && overlayWindow && event.sender === overlayWindow.webContents) {
+    overlayWindow.setIgnoreMouseEvents(Boolean(ignore), { forward: true });
+  }
+});
+
+ipcMain.on('overlay:hide', (event) => {
+  if (isTrustedSender(event) && overlayWindow && event.sender === overlayWindow.webContents) overlayWindow.hide();
 });
 
 import * as fs from 'fs';
 
-ipcMain.handle('read-workspace-files', async () => {
+ipcMain.handle('read-workspace-files', async (event) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
   const dirPath = process.cwd();
   const chunksToEmbed: { filePath: string, text: string }[] = [];
   
@@ -415,18 +481,24 @@ ipcMain.handle('read-workspace-files', async () => {
   return chunksToEmbed;
 });
 
-ipcMain.handle('save-semantic-index', async (_, data) => {
-  fs.writeFileSync(path.join(process.cwd(), '.iris_semantic_index.json'), JSON.stringify(data), 'utf-8');
+ipcMain.handle('save-semantic-index', async (event, data: unknown) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  if (!Array.isArray(data) || data.length > 50_000) throw new Error('Invalid semantic index payload');
+  const serialized = JSON.stringify(data);
+  if (Buffer.byteLength(serialized, 'utf8') > 25 * 1024 * 1024) throw new Error('Semantic index payload is too large');
+  fs.writeFileSync(path.join(app.getPath('userData'), 'iris-semantic-index.json'), serialized, 'utf-8');
   return true;
 });
 
-ipcMain.handle('load-semantic-index', async () => {
-  const p = path.join(process.cwd(), '.iris_semantic_index.json');
+ipcMain.handle('load-semantic-index', async (event) => {
+  if (!isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+  const p = path.join(app.getPath('userData'), 'iris-semantic-index.json');
   if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'));
   return [];
 });
 
 ipcMain.handle('search-memory', async (event, query) => {
+  if (!isTrustedSender(event) || typeof query !== 'string' || query.length > 2_000) throw new Error('Invalid memory search request');
   if (engine) {
     return await engine.searchMemory(query);
   }
@@ -434,6 +506,7 @@ ipcMain.handle('search-memory', async (event, query) => {
 });
 
 ipcMain.handle('resume-workflow', async (event, session) => {
+  if (!isTrustedSender(event) || !session || typeof session !== 'object') throw new Error('Invalid workflow session');
   if (engine) {
     await engine.resumeWorkflow(session);
   }

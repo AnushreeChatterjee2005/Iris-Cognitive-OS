@@ -16,10 +16,12 @@ import queue
 import re
 import glob
 import subprocess
+from urllib.parse import quote_plus, urlparse
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
+from task_state import TaskLifecycle, TaskState, TERMINAL_STATES
 
 # Win32 & COM imports
 import win32api
@@ -39,12 +41,31 @@ import psutil
 
 # Constant names
 PARALLEL_DESKTOP_NAME = "IRIS_ParallelDesktop"
+PARALLEL_DESKTOP_PATH = f"WinSta0\\{PARALLEL_DESKTOP_NAME}"
 PARALLEL_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parallel_storage")
 os.makedirs(PARALLEL_DATA_DIR, exist_ok=True)
 PARALLEL_BROWSER_PROFILE = os.path.join(PARALLEL_DATA_DIR, "browser_profile")
 os.makedirs(PARALLEL_BROWSER_PROFILE, exist_ok=True)
 PARALLEL_DOWNLOADS_DIR = os.path.join(PARALLEL_DATA_DIR, "downloads")
 os.makedirs(PARALLEL_DOWNLOADS_DIR, exist_ok=True)
+PARALLEL_CDP_URL = os.environ.get("IRIS_PARALLEL_CDP_URL", "http://127.0.0.1:9223")
+_parallel_cdp = urlparse(PARALLEL_CDP_URL)
+if _parallel_cdp.scheme != "http" or _parallel_cdp.hostname not in {"127.0.0.1", "localhost"} or not _parallel_cdp.port:
+    raise ValueError("IRIS_PARALLEL_CDP_URL must be an HTTP loopback URL with an explicit port")
+PARALLEL_CDP_PORT = _parallel_cdp.port
+SUPPORTED_PARALLEL_APPS = {
+    "chrome", "browser", "google chrome", "notepad", "notes", "cmd", "terminal",
+    "code", "vscode", "visual studio code", "excel", "calc", "calculator",
+}
+
+
+class _ProcessReference:
+    def __init__(self, pid: int, process_handle: Any):
+        self.pid = pid
+        self._process_handle = process_handle
+
+    def kill(self) -> None:
+        win32process.TerminateProcess(self._process_handle, 0)
 
 
 class ParallelEnvironment:
@@ -71,13 +92,8 @@ class ParallelTask:
         self.task_id = task_id
         self.condition = condition
         self.mode = mode  # "observe", "assist", "autonomous"
-        self.status = "queued"  # "queued", "running", "paused", "waiting_confirmation", "user_takeover", "completed", "error", "stopped"
-        self.progress = 0  # 0 to 100
-        self.current_step = ""
+        self.lifecycle = TaskLifecycle(task_id=task_id, objective=condition)
         self.thought = "Initializing parallel workspace..."
-        self.created_at = time.time()
-        self.updated_at = time.time()
-        self.completed_at = None
         self.active_apps: List[Dict[str, Any]] = []
         self.timeline: List[Dict[str, Any]] = []
         self.results: Dict[str, Any] = {
@@ -88,10 +104,48 @@ class ParallelTask:
             "raw_output": ""
         }
         self.confirmation_request: Optional[Dict[str, Any]] = None
-        self.error_message: Optional[str] = None
         self.is_paused = False
         self.is_stopped = False
         self.takeover_active = False
+
+    @property
+    def state(self) -> str:
+        return self.lifecycle.state.value
+
+    @property
+    def progress(self) -> int:
+        return self.lifecycle.progress
+
+    @progress.setter
+    def progress(self, value: int) -> None:
+        self.lifecycle.progress = max(0, min(int(value), 100))
+
+    @property
+    def current_step(self) -> str:
+        return self.lifecycle.current_step
+
+    @current_step.setter
+    def current_step(self, value: str) -> None:
+        self.lifecycle.current_step = value
+
+    @property
+    def created_at(self) -> float:
+        return self.lifecycle.created_at
+
+    @property
+    def updated_at(self) -> float:
+        return self.lifecycle.updated_at
+
+    @updated_at.setter
+    def updated_at(self, value: float) -> None:
+        self.lifecycle.updated_at = value
+
+    @property
+    def completed_at(self) -> Optional[float]:
+        return self.lifecycle.completed_at
+
+    def transition(self, state: TaskState | str, **kwargs) -> None:
+        self.lifecycle.transition(state, **kwargs)
 
     def add_timeline_event(self, action: str, details: str, thought: str = "", status: str = "info"):
         timestamp_str = datetime.now().strftime("%H:%M:%S")
@@ -112,21 +166,14 @@ class ParallelTask:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "task_id": self.task_id,
+            **self.lifecycle.to_dict(),
             "condition": self.condition,
             "mode": self.mode,
-            "status": self.status,
-            "progress": self.progress,
-            "current_step": self.current_step,
             "thought": self.thought,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "completed_at": self.completed_at,
             "active_apps": self.active_apps,
             "timeline": self.timeline,
             "results": self.results,
             "confirmation_request": self.confirmation_request,
-            "error_message": self.error_message,
             "is_paused": self.is_paused,
             "takeover_active": self.takeover_active
         }
@@ -148,7 +195,12 @@ class ParallelDesktopManager:
 
     def __init__(self):
         self.desktop_name = PARALLEL_DESKTOP_NAME
+        self.desktop_path = PARALLEL_DESKTOP_PATH
         self.hdesk = None
+        self.desktop_initialized = False
+        self.initialization_error: Optional[str] = None
+        self.initialization_attempts = 0
+        self.initialization_thread_id: Optional[int] = None
         self.active_tasks: Dict[str, ParallelTask] = {}
         self.task_history: List[ParallelTask] = []
         self.current_active_task_id: Optional[str] = None
@@ -162,28 +214,40 @@ class ParallelDesktopManager:
 
     def init_desktop(self) -> bool:
         """Initializes or opens the isolated Win32 virtual desktop."""
+        self.initialization_attempts += 1
+        self.initialization_thread_id = threading.get_ident()
+        self.initialization_error = None
+        self.desktop_initialized = False
+
         try:
             if pythoncom:
                 pythoncom.CoInitialize()
-        except Exception:
-            pass
+        except Exception as exc:
+            self.initialization_error = f"COM initialization failed: {exc}"
 
         try:
             # Create or open the hidden virtual desktop
             self.hdesk = win32service.CreateDesktop(
                 self.desktop_name, 0, win32con.GENERIC_ALL, None
             )
+            self.desktop_initialized = True
             print(f"[ParallelDesktop] Virtual desktop '{self.desktop_name}' initialized successfully.")
             return True
-        except Exception as e:
+        except Exception as create_error:
             try:
                 self.hdesk = win32service.OpenDesktop(
                     self.desktop_name, 0, False, win32con.GENERIC_ALL
                 )
+                self.desktop_initialized = True
                 print(f"[ParallelDesktop] Opened existing virtual desktop '{self.desktop_name}'.")
                 return True
-            except Exception as e2:
-                print(f"[ParallelDesktop] Failed to create or open virtual desktop: {e2}")
+            except Exception as open_error:
+                self.hdesk = None
+                self.initialization_error = (
+                    f"CreateDesktop failed: {create_error}; "
+                    f"OpenDesktop failed: {open_error}"
+                )
+                print(f"[ParallelDesktop] Failed to create or open virtual desktop: {self.initialization_error}")
                 return False
 
     def get_desktop_metrics(self) -> Dict[str, Any]:
@@ -213,26 +277,61 @@ class ParallelDesktopManager:
                 "parallel_memory_mb": round(total_parallel_rss / (1024 * 1024), 1) or 148.5,
                 "active_apps_count": max(app_count, 1 if self.current_active_task_id else 0),
                 "desktop_name": self.desktop_name,
-                "is_active": bool(self.hdesk is not None)
+                "desktop_path": self.desktop_path,
+                "is_active": bool(self.desktop_initialized and self.hdesk is not None),
+                "error": self.initialization_error,
             }
-        except Exception as e:
+        except Exception as exc:
             return {
-                "cpu_percent": 12.4,
-                "system_memory_used_gb": 4.2,
-                "parallel_memory_mb": 185.0,
-                "active_apps_count": 2,
+                "cpu_percent": None,
+                "system_memory_used_gb": None,
+                "parallel_memory_mb": None,
+                "active_apps_count": 0,
                 "desktop_name": self.desktop_name,
-                "is_active": True
+                "desktop_path": self.desktop_path,
+                "is_active": False,
+                "error": str(exc),
             }
+
+    def get_diagnostics(self) -> Dict[str, Any]:
+        """Returns truthful initialization and Win32 state for troubleshooting."""
+        try:
+            window_count = len(self.get_parallel_windows()) if self.hdesk else 0
+        except Exception as exc:
+            window_count = 0
+            if not self.initialization_error:
+                self.initialization_error = f"Window enumeration failed: {exc}"
+
+        return {
+            "desktop_name": self.desktop_name,
+            "desktop_path": self.desktop_path,
+            "desktop_initialized": bool(self.desktop_initialized and self.hdesk),
+            "initialization_attempts": self.initialization_attempts,
+            "initialization_thread_id": self.initialization_thread_id,
+            "current_thread_id": threading.get_ident(),
+            "initialization_error": self.initialization_error,
+            "active_process_count": len(self.active_processes),
+            "window_count": window_count,
+            "active_task_id": self.current_active_task_id,
+        }
 
     def launch_process_in_desktop(self, executable: str, cmd_args: str = "") -> Optional[Any]:
         """Spawns an application specifically inside the isolated Parallel Desktop."""
         try:
+            if not self.desktop_initialized or not self.hdesk:
+                raise RuntimeError(self.initialization_error or "Parallel Desktop is not initialized")
+
             startup = win32process.STARTUPINFO()
-            startup.lpDesktop = self.desktop_name
+            startup.lpDesktop = self.desktop_path
             
             # Map standard friendly app names to executables
             exe_clean = executable.lower().strip()
+            if exe_clean not in SUPPORTED_PARALLEL_APPS:
+                raise ValueError(f"Unsupported Parallel Desktop application: {executable}")
+            if cmd_args:
+                parsed_argument = urlparse(cmd_args)
+                if exe_clean not in {"chrome", "browser", "google chrome"} or parsed_argument.scheme not in {"http", "https"} or not parsed_argument.netloc:
+                    raise ValueError("Parallel Desktop launch arguments must be an absolute HTTP(S) browser URL")
             app_path = executable
             
             if exe_clean in ["chrome", "browser", "google chrome"]:
@@ -246,7 +345,7 @@ class ParallelDesktopManager:
                     if os.path.exists(p):
                         app_path = p
                         break
-                cmd = f'"{app_path}" --user-data-dir="{PARALLEL_BROWSER_PROFILE}" --no-first-run --no-default-browser-check {cmd_args}'
+                cmd = f'"{app_path}" --remote-debugging-port={PARALLEL_CDP_PORT} --user-data-dir="{PARALLEL_BROWSER_PROFILE}" --no-first-run --no-default-browser-check {cmd_args}'
             elif exe_clean in ["notepad", "notes"]:
                 app_path = "notepad.exe"
                 cmd = f'notepad.exe {cmd_args}'
@@ -273,9 +372,9 @@ class ParallelDesktopManager:
             )
             
             # Store process ref
-            fake_proc = type("ProcRef", (), {"pid": dw_proc_id, "kill": lambda: win32process.TerminateProcess(h_process, 0)})()
-            self.active_processes[str(dw_proc_id)] = fake_proc
-            return fake_proc
+            process_ref = _ProcessReference(dw_proc_id, h_process)
+            self.active_processes[str(dw_proc_id)] = process_ref
+            return process_ref
         except Exception as e:
             print(f"[ParallelDesktop] Error launching process {executable}: {e}")
             return None
@@ -334,8 +433,8 @@ class ParallelDesktopManager:
                 return True
 
             win32gui.EnumDesktopWindows(self.hdesk, enum_cb, None)
-        except Exception as e:
-            print(f"[ParallelDesktop] Window enum note: {e}")
+        except Exception:
+            pass
         finally:
             if old_hdesk:
                 try:
@@ -396,7 +495,7 @@ class ParallelDesktopManager:
             app_x += 125
 
         # Mode Indicator on taskbar
-        mode_text = f"PARALLEL WORKSPACE: 100% ISOLATED"
+        mode_text = "PARALLEL WORKSPACE: SEPARATE DESKTOP"
         draw.text((width - 250, height - 25), mode_text, fill=(0, 229, 255))
 
         return base_img
@@ -517,7 +616,11 @@ class ParallelDesktopManager:
         Injects user mouse clicks and keystrokes into parallel desktop windows
         during interactive Take Over mode.
         """
-        if not self.hdesk:
+        active_task = self.get_active_task()
+        if not self.hdesk or not active_task or not active_task.takeover_active or active_task.lifecycle.state in TERMINAL_STATES:
+            return False
+        frame_size = self.capture_parallel_frame().size
+        if x < 0 or y < 0 or x >= frame_size[0] or y >= frame_size[1]:
             return False
             
         old_hdesk = None
@@ -609,27 +712,27 @@ class ParallelDesktopManager:
 
     def pause_task(self, task_id: str) -> bool:
         task = self.get_task(task_id)
-        if task:
+        if task and task.lifecycle.state == TaskState.RUNNING:
             task.is_paused = True
-            task.status = "paused"
+            task.transition(TaskState.WAITING, current_step="Paused by user")
             task.add_timeline_event("Pause", "Task execution frozen by user.", "Preserving open applications and virtual state.", "warning")
             return True
         return False
 
     def resume_task(self, task_id: str) -> bool:
         task = self.get_task(task_id)
-        if task:
+        if task and task.lifecycle.state == TaskState.WAITING:
             task.is_paused = False
-            task.status = "running"
+            task.transition(TaskState.RUNNING, current_step="Resuming task")
             task.add_timeline_event("Resume", "Task execution resumed.", "Continuing autonomous workflow.", "info")
             return True
         return False
 
     def stop_task(self, task_id: str) -> bool:
         task = self.get_task(task_id)
-        if task:
+        if task and task.lifecycle.state not in TERMINAL_STATES:
             task.is_stopped = True
-            task.status = "stopped"
+            task.transition(TaskState.CANCELLED, current_step="Cancelled by user")
             task.add_timeline_event("Stop", "Task terminated by user.", "Stopping virtual processes.", "error")
             return True
         return False
@@ -647,10 +750,12 @@ class ParallelDesktopManager:
         if task:
             task.takeover_active = active
             if active:
-                task.status = "user_takeover"
+                if task.lifecycle.state == TaskState.RUNNING:
+                    task.transition(TaskState.WAITING, current_step="Waiting for user control")
                 task.add_timeline_event("Take Over", "User took manual control of Parallel Desktop.", "Forwarding interactive inputs to virtual windows.", "warning")
             else:
-                task.status = "running"
+                if task.lifecycle.state == TaskState.WAITING:
+                    task.transition(TaskState.RUNNING, current_step="Control returned to IRIS")
                 task.add_timeline_event("Return Control", "User returned control to IRIS agent.", "Resuming autonomous execution.", "info")
             return True
         return False
@@ -660,7 +765,8 @@ class ParallelDesktopManager:
         if task and task.confirmation_request:
             task.confirmation_request["resolved"] = True
             task.confirmation_request["approved"] = approved
-            task.status = "running"
+            if task.lifecycle.state == TaskState.WAITING:
+                task.transition(TaskState.RUNNING, current_step="Confirmation received")
             task.add_timeline_event("User Confirmation", f"Action {'Approved' if approved else 'Rejected'} by user.", "", "info")
             return True
         return False
@@ -675,7 +781,8 @@ class ParallelDesktopManager:
             return {"status": "error", "message": "Task not found"}
 
         transferred_items = []
-        host_desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        host_desktop = os.environ.get("IRIS_EXPORT_DIR") or os.path.join(os.path.expanduser("~"), "Desktop")
+        os.makedirs(host_desktop, exist_ok=True)
 
         # 1. Bring Files / Generated Reports to Real Desktop
         if transfer_type in ["all", "files"]:
@@ -701,8 +808,8 @@ class ParallelDesktopManager:
                         import shutil
                         shutil.copy2(f, dest)
                         transferred_items.append({"type": "file", "name": os.path.basename(dest), "path": dest})
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        print(f"[ParallelDesktop] Error copying artifact: {exc}")
 
         # 2. Open Researched URLs on Real Default Browser (Only if specifically requested)
         if transfer_type == "urls":
@@ -711,8 +818,11 @@ class ParallelDesktopManager:
                 try:
                     webbrowser.open(url)
                     transferred_items.append({"type": "url", "value": url})
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(f"[ParallelDesktop] Error opening researched URL: {exc}")
+
+        if not transferred_items:
+            return {"status": "error", "message": "No requested items were available to transfer.", "items": []}
 
         task.add_timeline_event("Bring to Desktop", f"Transferred {len(transferred_items)} items to real desktop.", "Report saved to ~/Desktop.", "success")
         return {
@@ -734,7 +844,8 @@ class ParallelDesktopManager:
         if not summary_content:
             return {"status": "error", "message": "No research content available to export"}
 
-        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        desktop = os.environ.get("IRIS_EXPORT_DIR") or os.path.join(os.path.expanduser("~"), "Desktop")
+        os.makedirs(desktop, exist_ok=True)
         clean_title = re.sub(r'[^a-zA-Z0-9_-]', '_', task.condition[:35]).strip('_') or "IRIS_Report"
         fmt = format_type.lower().strip()
         exported_path = ""
@@ -834,6 +945,28 @@ class ParallelDesktopManager:
                 with open(exported_path, "w", encoding="utf-8") as f:
                     f.write(summary_content)
 
+        if not exported_path or not os.path.isfile(exported_path) or os.path.getsize(exported_path) == 0:
+            return {"status": "error", "message": "Export file was not created."}
+        try:
+            extension = os.path.splitext(exported_path)[1].lower()
+            if extension in {".txt", ".doc"}:
+                with open(exported_path, "r", encoding="utf-8", errors="ignore") as exported_file:
+                    exported_text = exported_file.read()
+            elif extension == ".docx":
+                from docx import Document
+                exported_text = "\n".join(paragraph.text for paragraph in Document(exported_path).paragraphs)
+            elif extension == ".pdf":
+                import pypdf
+                exported_text = "\n".join(page.extract_text() or "" for page in pypdf.PdfReader(exported_path).pages)
+            else:
+                exported_text = ""
+            expected_marker = re.sub(r"\s+", " ", re.sub(r"[#*`=]", "", summary_content)).strip()[:40]
+            normalized_export = re.sub(r"\s+", " ", re.sub(r"[#*`=]", "", exported_text)).strip()
+            if not expected_marker or expected_marker not in normalized_export:
+                return {"status": "error", "message": "Export verification failed: report content was not found in the output file."}
+        except Exception as exc:
+            return {"status": "error", "message": f"Export verification failed: {exc}"}
+
         task.add_timeline_event("Export", f"Exported dossier as {fmt.upper()} to Desktop.", f"Saved to {os.path.basename(exported_path)}", "success")
         return {
             "status": "success",
@@ -849,7 +982,7 @@ class ParallelDesktopManager:
         Goal -> Plan -> Open Apps -> Observe -> Act -> Verify -> Synthesize -> Complete
         """
         try:
-            task.status = "running"
+            task.transition(TaskState.RUNNING, current_step="Starting Parallel Desktop task")
             task.progress = 5
             task.add_timeline_event("Task Started", f"Autonomous task initialized: '{task.condition}'", "Spawning isolated virtual desktop environment.", "info")
             time.sleep(0.8)
@@ -860,6 +993,13 @@ class ParallelDesktopManager:
             
             # Determine required apps
             cond_lower = task.condition.lower()
+            clean_query = task.condition
+            for prefix in ["research", "investigate", "find", "search for", "look up", "prepare", "in background", "in the background", "in parallel"]:
+                clean_query = re.sub(re.escape(prefix), '', clean_query, flags=re.IGNORECASE).strip()
+            if not clean_query:
+                clean_query = "technology analysis"
+            search_url = f"https://www.google.com/search?q={quote_plus(clean_query)}"
+
             apps_to_launch = ["chrome"]
             if any(k in cond_lower for k in ["pdf", "invoice", "excel", "sheet", "table"]):
                 apps_to_launch.append("excel")
@@ -870,7 +1010,10 @@ class ParallelDesktopManager:
 
             task.active_apps = [{"name": app.title(), "status": "running"} for app in apps_to_launch]
             for app in apps_to_launch:
-                self.launch_process_in_desktop(app)
+                launch_args = search_url if app == "chrome" else ""
+                process = self.launch_process_in_desktop(app, launch_args)
+                if process is None:
+                    raise RuntimeError(f"Could not launch {app} in the Parallel Desktop")
                 time.sleep(0.4)
 
             # 2. Planning & Step Decomposition
@@ -883,21 +1026,15 @@ class ParallelDesktopManager:
 
             # 3. Agentic Research & Execution Phase
             task.progress = 50
-            clean_query = task.condition
-            for prefix in ["research", "investigate", "find", "search for", "look up", "prepare", "in background", "in the background", "in parallel"]:
-                clean_query = re.sub(re.escape(prefix), '', clean_query, flags=re.IGNORECASE).strip()
-            if not clean_query: clean_query = "technology and laptop analysis"
-
-            search_url = f"https://www.google.com/search?q={clean_query.replace(' ', '+')}"
             task.results["urls"].append(search_url)
-            task.add_timeline_event("Web Navigation", f"Navigated isolated browser to search query: '{clean_query}'", f"Inspecting live search indices and knowledge cards.", "info")
+            task.add_timeline_event("Web Navigation", f"Opened the isolated browser at search query: '{clean_query}'", "Search page launched in the Parallel Desktop.", "info")
             time.sleep(1.2)
 
             if self._wait_if_paused_or_stopped(task): return
 
             # 4. Assist Mode Safety Gate (if applicable)
             if task.mode == "assist":
-                task.status = "waiting_confirmation"
+                task.transition(TaskState.WAITING, current_step="Waiting for confirmation")
                 task.confirmation_request = {
                     "action": "Deep Web Extraction & File Write",
                     "details": f"IRIS is about to query and synthesize {clean_query} and write report files.",
@@ -912,18 +1049,39 @@ class ParallelDesktopManager:
                     time.sleep(0.5)
                 
                 if not task.confirmation_request.get("approved"):
-                    task.status = "stopped"
+                    task.transition(TaskState.CANCELLED, current_step="User declined the requested action")
                     task.add_timeline_event("Action Aborted", "User declined execution in Assist mode.", "", "error")
                     return
 
             # 5. Extract & Synthesize Findings using LLM / Domain Model
             task.progress = 75
-            task.add_timeline_event("Data Extraction & Synthesis", "Extracted verified technical resources. Structuring comparison matrix.", "Synthesizing benchmarks, pricing, and pros/cons.", "info")
-            
-            # Generate structured high-quality synthesis
-            summary = self._synthesize_research_output(task.condition, clean_query)
+            task.add_timeline_event("Data Extraction & Synthesis", "Collecting readable pages and validating citations.", "Extracting real DOM content from visited sources before synthesis.", "info")
+
+            from browser_automation import PlaywrightCDPAdapter
+            from research_service import EvidenceResearchService
+            research = EvidenceResearchService(PlaywrightCDPAdapter(
+                cdp_url=PARALLEL_CDP_URL,
+                profile_dir=PARALLEL_BROWSER_PROFILE,
+            )).research(clean_query, max_sources=5)
+            if research.status == "failed":
+                raise RuntimeError(f"Evidence collection failed: {research.error}")
+            summary = research.report
             task.results["summary"] = summary
             task.results["raw_output"] = summary
+            task.results["urls"] = [source.url for source in research.sources]
+            task.results["extracted_data"] = [
+                {"url": source.url, "title": source.title, "published_at": source.published_at, "excerpt": source.excerpt}
+                for source in research.sources
+            ]
+            task.results["source_attempts"] = [
+                {"url": attempt.url, "status": attempt.status, "details": attempt.details}
+                for attempt in research.attempts
+            ]
+            task.lifecycle.add_evidence({
+                "type": "research_sources",
+                "count": len(research.sources),
+                "citation_status": research.status,
+            })
             time.sleep(1.0)
 
             if self._wait_if_paused_or_stopped(task): return
@@ -937,16 +1095,25 @@ class ParallelDesktopManager:
             task.add_timeline_event("Artifact Generation", f"Compiled research dossier ({len(summary.splitlines())} lines). Saved to parallel storage.", "Ready for review in Parallel Desktop.", "info")
             time.sleep(0.6)
 
-            # 7. Completion - 100% Isolated inside Parallel Desktop
+            if research.status != "success":
+                task.transition(
+                    TaskState.FAILED,
+                    current_step="Partial research saved for review",
+                    error_code="research_partial",
+                    error_details=research.error,
+                )
+                task.add_timeline_event("Partial Result", research.error, "Collected evidence was saved, but full citation validation did not pass.", "warning")
+                return
+
+            # 7. Completion inside the separate Parallel Desktop
             task.progress = 100
-            task.status = "completed"
-            task.completed_at = time.time()
             task.thought = f"Task completed successfully in Parallel Desktop. Results and visual artifacts ready in Parallel Desktop tab."
-            task.add_timeline_event("Task Completed", "Autonomous workflow completed with 0 host desktop disruption.", task.thought, "success")
+            task.transition(TaskState.SUCCESS, current_step="Task completed and output verified")
+            task.add_timeline_event("Task Completed", "Autonomous workflow completed in the separate Windows desktop.", task.thought, "success")
 
         except Exception as e:
-            task.status = "error"
-            task.error_message = str(e)
+            if task.lifecycle.state not in TERMINAL_STATES:
+                task.transition(TaskState.FAILED, current_step="Task failed", error_code="parallel_task_error", error_details=str(e))
             task.add_timeline_event("Task Error", f"Encountered unexpected condition: {e}", "Self-healing fallback engaged.", "error")
 
     def _wait_if_paused_or_stopped(self, task: ParallelTask) -> bool:
@@ -956,106 +1123,6 @@ class ParallelDesktopManager:
                 return True
             time.sleep(0.5)
         return task.is_stopped
-
-    def _synthesize_research_output(self, original_prompt: str, topic: str) -> str:
-        """Synthesizes rich, structured autonomous research reports."""
-        try:
-            from groq import Groq
-            from dotenv import load_dotenv
-            load_dotenv()
-            groq_key = os.environ.get("GROQ_API_KEY")
-            if groq_key:
-                client = Groq(api_key=groq_key)
-                prompt = f"""You are the IRIS Autonomous Agent operating in the Parallel Desktop.
-The user requested: "{original_prompt}"
-Topic: "{topic}"
-
-Synthesize a comprehensive, executive-ready, highly structured research dossier specifically about "{topic}".
-Include:
-1. Executive Summary & Objective
-2. Key Options / Comparison Matrix (Top 4-5 items with key details, dates/specs/tracks, prizes/pricing, advantages, and trade-offs)
-3. Direct Recommendations & Actionable Insights by Use-Case
-4. Supporting Resources, Official Links & Next Steps
-
-Format with clear headers and bullet points. Output clean, readable plain text (no markdown triple-backtick fences)."""
-                
-                # Fetch available chat models dynamically from Groq account
-                try:
-                    all_models = [m.id for m in client.models.list().data]
-                    chat_candidates = [
-                        m for m in all_models
-                        if not any(x in m.lower() for x in ['whisper', 'guard', 'safeguard', 'orpheus', 'tts', 'audio'])
-                    ]
-                except Exception:
-                    chat_candidates = []
-
-                preferred_order = [
-                    "openai/gpt-oss-120b",
-                    "openai/gpt-oss-20b",
-                    "qwen/qwen3.6-27b",
-                    "groq/compound",
-                    "groq/compound-mini",
-                    "llama-3.3-70b-versatile",
-                    "llama-3.1-8b-instant",
-                    "allam-2-7b"
-                ]
-
-                ordered_candidates = [m for m in preferred_order if m in chat_candidates]
-                for m in chat_candidates:
-                    if m not in ordered_candidates:
-                        ordered_candidates.append(m)
-
-                if not ordered_candidates:
-                    ordered_candidates = preferred_order
-
-                for model_candidate in ordered_candidates:
-                    try:
-                        resp = client.chat.completions.create(
-                            messages=[{"role": "user", "content": prompt}],
-                            model=model_candidate,
-                            temperature=0.2,
-                            max_tokens=1000
-                        )
-                        content = resp.choices[0].message.content.strip()
-                        # Clean out reasoning think tags if returned by reasoning models
-                        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-                        if len(content) > 100:
-                            return content
-                    except Exception as me:
-                        print(f"[ParallelDesktop] Model {model_candidate} attempt note: {me}")
-                        continue
-        except Exception as e:
-            print(f"[ParallelDesktop] LLM synthesis note: {e}")
-
-        # High quality dynamic topic-tailored fallback (never assume laptops)
-        topic_title = topic.strip().title()
-        clean_topic_slug = re.sub(r'[^a-zA-Z0-9_]', '_', topic.lower()).strip('_') or "research"
-        return f"""=== IRIS PARALLEL DESKTOP RESEARCH DOSSIER ===
-Objective: {original_prompt}
-Executed in: Isolated Parallel Environment (WinSta0\\IRIS_ParallelDesktop)
-Timestamp: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
-1. Executive Summary:
-Autonomous research completed across verified industry benchmarks, technical documentation, and community indices for "{topic_title}". The parallel environment gathered real-time performance indicators, viability data, and key metrics.
-
-2. Comprehensive Analysis & Findings for {topic_title}:
-- Category Overview & Key Highlights:
-  * Primary Scope: In-depth analysis of {topic_title} tailored for production and developer workflows.
-  * Verified Highlights: Evaluated top tiers, participating tracks/specifications, criteria, and outcomes.
-  * Operational Rating: 4.8 / 5.0
-
-- Strategic Recommendations:
-  * Best for active participants, software engineers, and researchers targeting {topic_title}.
-  * Prioritize options with high community adoption, robust documentation, and verified reward/recognition structures.
-
-3. Actionable Next Steps:
-- Review the collected resource links and dossier files in parallel storage.
-- Transfer complete dataset to host workspace using [Bring to Desktop].
-
-4. Research Artifacts:
-- Saved to: parallel_storage/{clean_topic_slug}_notes.txt
-- Ready to transfer to host desktop via [Bring to Desktop]."""
-
 
 # Global singleton instance
 parallel_engine = ParallelDesktopManager.get_instance()

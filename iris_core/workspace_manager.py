@@ -1017,7 +1017,7 @@ class WorkspaceManager:
                 launched = True
             except Exception:
                 try:
-                    subprocess.Popen([exe], shell=True)
+                    subprocess.Popen([exe])
                     launched = True
                 except Exception:
                     pass

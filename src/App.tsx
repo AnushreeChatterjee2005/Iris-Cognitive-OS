@@ -5,7 +5,16 @@ import { TimelineAgent } from './ai/timelineAgent';
 import { WorkspacesTab } from './WorkspacesTab';
 import { ParallelDesktopTab } from './ParallelDesktopTab';
 import { FloatingResultHUD } from './FloatingResultHUD';
-import { Globe, Mic, Brain, Zap, CheckCircle2, Square, MessageSquare, Send, X, LayoutGrid, Layers } from 'lucide-react';
+import { Globe, Brain, Zap, CheckCircle2, Square, MessageSquare, Send, X, LayoutGrid, Layers, Mic, MicOff } from 'lucide-react';
+import { irisApiUrl } from './config';
+
+function renderSafeBoldText(text: string): React.ReactNode[] {
+  return text.split(/(\*\*.*?\*\*)/g).map((part, index) => (
+    part.startsWith('**') && part.endsWith('**')
+      ? <strong key={index}>{part.slice(2, -2)}</strong>
+      : <React.Fragment key={index}>{part}</React.Fragment>
+  ));
+}
 
 function SearchOverlay() {
   const [status, setStatus] = useState('idle'); // idle, drawing_source, drawing_target, typing, running, finished
@@ -14,8 +23,9 @@ function SearchOverlay() {
   const [currentBox, setCurrentBox] = useState<any>(null);
   const [startPos, setStartPos] = useState<any>(null);
   
-  const [actionType, setActionType] = useState('when'); // now, when, always
+  const [actionType, setActionType] = useState('now'); // now, when, always
   const [command, setCommand] = useState('');
+  const [taskError, setTaskError] = useState('');
   const [animationKey, setAnimationKey] = useState(0);
   
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -92,38 +102,72 @@ function SearchOverlay() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       setStatus('running');
+      setTaskError('');
       if ((window as any).electronAPI) {
         (window as any).electronAPI.setClickThrough(true);
       }
-      fetch('http://127.0.0.1:8000/api/watch-and-strike', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      void (async () => {
+        const payload = {
           source_bbox: sourceBox,
-          target_bbox: targetBox, // can be null for single-box tasks
+          target_bbox: targetBox,
           condition: command,
           action_text: "",
-          mode: actionType
-        })
-      }).then(() => {
-        setStatus('finished');
-        setTimeout(() => {
-          window.dispatchEvent(new Event('electron-window-hidden'));
-          if ((window as any).electronAPI) {
-            (window as any).electronAPI.hideWindow();
-            (window as any).electronAPI.setClickThrough(false);
+          mode: actionType,
+        };
+        try {
+          let response = await fetch(irisApiUrl('/api/watch-and-strike'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (response.status === 428) {
+            const blocked = await response.json().catch(() => ({}));
+            if (!window.confirm(blocked.detail || 'This action requires confirmation. Continue?')) {
+              throw new Error('Sensitive action cancelled.');
+            }
+            response = await fetch(irisApiUrl('/api/watch-and-strike'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...payload, confirmed_sensitive: true }),
+            });
           }
-        }, 400);
-      }).catch((err) => {
-        console.error(err);
-        setStatus('finished');
-        setTimeout(() => {
-          setStatus('idle');
-          if ((window as any).electronAPI) {
-            (window as any).electronAPI.setClickThrough(false);
+          if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.detail || error.message || `Task creation failed (${response.status}).`);
           }
-        }, 2000);
-      });
+          const created = await response.json();
+          if (!created.task_id) throw new Error('Backend did not return a task ID.');
+
+          let terminal: Record<string, unknown> | null = null;
+          for (let attempt = 0; attempt < 180; attempt += 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const statusResponse = await fetch(irisApiUrl(`/api/status/${created.task_id}`));
+            if (!statusResponse.ok) throw new Error(`Task status failed (${statusResponse.status}).`);
+            const task = await statusResponse.json();
+            if (['success', 'failed', 'cancelled'].includes(String(task.state))) {
+              terminal = task;
+              break;
+            }
+          }
+          if (!terminal) throw new Error('Task timed out before reaching a terminal state.');
+          if (terminal.state !== 'success') {
+            throw new Error(String(terminal.error_details || terminal.thought || `Task ${terminal.state}.`));
+          }
+
+          setStatus('finished');
+          setTimeout(() => {
+            window.dispatchEvent(new Event('electron-window-hidden'));
+            (window as any).electronAPI?.hideWindow();
+            (window as any).electronAPI?.setClickThrough(false);
+          }, 700);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Automation failed.';
+          console.error('[IRIS] Overlay automation failed:', error);
+          setTaskError(message);
+          setStatus('failed');
+          (window as any).electronAPI?.setClickThrough(false);
+        }
+      })();
     } else if (e.key === 'Escape') {
       setStatus('idle');
       setSourceBox(null);
@@ -242,6 +286,11 @@ function SearchOverlay() {
           </div>
         </div>
       )}
+      {status === 'failed' && (
+        <div className="instruction-toast" style={{ ...toastStyle, borderColor: '#ef4444' }}>
+          Task failed: {taskError}
+        </div>
+      )}
     </div>
   );
 }
@@ -273,16 +322,14 @@ function BlobOverlay() {
   const dragStart = React.useRef({ x: 0, y: 0 });
   const initialPos = React.useRef({ x: 0, y: 0 });
   const hasMoved = React.useRef(false);
-  const [isMicOn, setIsMicOn] = useState(false);
-  const isMicOnRef = React.useRef(false);
-  const [uiState, setUiState] = useState<'Idle' | 'Listening' | 'Thinking' | 'Working' | 'Done'>('Idle');
+  const [uiState, setUiState] = useState<'Idle' | 'Listening' | 'Thinking' | 'Working' | 'Done' | 'Error'>('Idle');
   const [recognition, setRecognition] = useState<any>(null);
   const [agentMessage, setAgentMessage] = useState('');
   const [ghostMousePos, setGhostMousePos] = useState<{x: number, y: number} | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [latestThought, setLatestThought] = useState('');
   const [activeFeedTask, setActiveFeedTask] = useState<string | null>(null);
-  const [frameTick, setFrameTick] = useState(Date.now());
+  const [frameTick, setFrameTick] = useState(0);
   const [pocketState, setPocketState] = useState<'idle' | 'collapsing' | 'pocketed' | 'expanding' | 'expanded'>('idle');
   const [pocketTask, setPocketTask] = useState<any>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -298,11 +345,11 @@ function BlobOverlay() {
   useEffect(() => {
     const checkParallelCompletion = async () => {
       try {
-        const resp = await fetch('http://127.0.0.1:8000/api/parallel-desktop/status');
+        const resp = await fetch(irisApiUrl('/api/parallel-desktop/status'));
         if (resp.ok) {
           const data = await resp.json();
           const task = data.active_task;
-          if (task && task.status === 'completed' && task.results?.summary) {
+          if (task && task.state === 'success' && task.results?.summary) {
             // On initial app mount, mark already completed past task as seen so it doesn't pop up old historical tasks
             if (initialLoadRef.current) {
               initialLoadRef.current = false;
@@ -349,8 +396,8 @@ function BlobOverlay() {
     }
   };
 
-  const toggleChatBox = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const toggleChatBox = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
     setIsChatOpen(prev => {
       const next = !prev;
       if (next) {
@@ -460,7 +507,7 @@ function BlobOverlay() {
       playPopSound();
       setAgentMessage(`Arranging workspace...`);
       try {
-        const metaResp = await fetch('http://127.0.0.1:8000/api/meta-os', {
+        const metaResp = await fetch(irisApiUrl('/api/meta-os'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ command: text })
@@ -473,11 +520,11 @@ function BlobOverlay() {
           if (isVoice) speak(msg);
           setTimeout(() => {
             setAgentMessage('');
-            setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+            setUiState('Idle');
           }, 3000);
         }
       } catch (err) {
-        setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+        setUiState('Idle');
         setAgentMessage("Could not arrange workspace.");
         setTimeout(() => setAgentMessage(''), 3000);
       }
@@ -498,11 +545,25 @@ function BlobOverlay() {
       setAgentMessage(`Working in Parallel Desktop...`);
       if (isVoice) speak("Working on that in background.");
       try {
-        const pResp = await fetch('http://127.0.0.1:8000/api/parallel-desktop/tasks', {
+        let pResp = await fetch(irisApiUrl('/api/parallel-desktop/tasks'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ condition: text, mode: 'autonomous' })
         });
+        if (pResp.status === 428) {
+          const blocked = await pResp.json().catch(() => ({}));
+          const approved = window.confirm(blocked.detail || 'This background action is sensitive. Allow IRIS to continue?');
+          if (!approved) {
+            setUiState('Idle');
+            setAgentMessage('Sensitive action cancelled.');
+            return;
+          }
+          pResp = await fetch(irisApiUrl('/api/parallel-desktop/tasks'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ condition: text, mode: 'autonomous', confirmed_sensitive: true })
+          });
+        }
         if (pResp.ok) {
           const pData = await pResp.json();
           if (pData.task?.task_id) setActiveTaskId(pData.task.task_id);
@@ -510,7 +571,7 @@ function BlobOverlay() {
           setAgentMessage("Running in Parallel Desktop!");
           setTimeout(() => {
             setAgentMessage('');
-            setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+            setUiState('Idle');
           }, 3000);
           return;
         }
@@ -523,11 +584,25 @@ function BlobOverlay() {
       playPopSound();
       setAgentMessage("Thinking...");
       try {
-        const chatResp = await fetch('http://127.0.0.1:8000/api/chat', {
+        let chatResp = await fetch(irisApiUrl('/api/chat'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: text })
         });
+        if (chatResp.status === 428) {
+          const blocked = await chatResp.json().catch(() => ({}));
+          const approved = window.confirm(blocked.detail || 'This chat action is sensitive. Allow IRIS to continue?');
+          if (!approved) {
+            setUiState('Idle');
+            setAgentMessage('Sensitive action cancelled.');
+            return;
+          }
+          chatResp = await fetch(irisApiUrl('/api/chat'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, confirmed_sensitive: true })
+          });
+        }
         const data = await chatResp.json();
         if (chatResp.ok && data.response) {
           setUiState('Done');
@@ -535,15 +610,15 @@ function BlobOverlay() {
           if (isVoice) speak(data.response);
           setTimeout(() => {
             setAgentMessage('');
-            setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+            setUiState('Idle');
           }, Math.max(4000, (data.response?.length || 0) * 60));
         } else {
-          setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+          setUiState('Idle');
           setAgentMessage("How can I assist you?");
           setTimeout(() => setAgentMessage(''), 3000);
         }
       } catch (err) {
-        setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+        setUiState('Idle');
         setAgentMessage("Error connecting to chat engine.");
         setTimeout(() => setAgentMessage(''), 3000);
       }
@@ -558,7 +633,7 @@ function BlobOverlay() {
     try {
       let inferredMode = "now";
       try {
-        const intentResp = await fetch('http://127.0.0.1:8000/api/parse-intent', {
+        const intentResp = await fetch(irisApiUrl('/api/parse-intent'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ command: text })
@@ -570,17 +645,32 @@ function BlobOverlay() {
         }
       } catch(e) {}
 
-      const autoResp = await fetch('http://127.0.0.1:8000/api/watch-and-strike', {
+      const automationPayload = {
+        source_bbox: null,
+        target_bbox: null,
+        condition: text,
+        action_text: "",
+        mode: inferredMode,
+      };
+      let autoResp = await fetch(irisApiUrl('/api/watch-and-strike'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_bbox: null,
-          target_bbox: null,
-          condition: text,
-          action_text: "",
-          mode: inferredMode
-        })
+        body: JSON.stringify(automationPayload)
       });
+      if (autoResp.status === 428) {
+        const blocked = await autoResp.json().catch(() => ({}));
+        const approved = window.confirm(blocked.detail || 'This action is sensitive. Allow IRIS to continue?');
+        if (!approved) {
+          setUiState('Idle');
+          setAgentMessage('Sensitive action cancelled.');
+          return;
+        }
+        autoResp = await fetch(irisApiUrl('/api/watch-and-strike'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...automationPayload, confirmed_sensitive: true })
+        });
+      }
       if (autoResp.ok) {
         const data = await autoResp.json();
         if (data.task_id) {
@@ -589,33 +679,86 @@ function BlobOverlay() {
           // Poll for completion
           const pollInterval = setInterval(async () => {
             try {
-              const statusResp = await fetch(`http://127.0.0.1:8000/api/status/${data.task_id}`);
+              const statusResp = await fetch(irisApiUrl(`/api/status/${data.task_id}`));
               if (statusResp.ok) {
                 const statusData = await statusResp.json();
                 if (!statusData.active) {
                   clearInterval(pollInterval);
-                  setUiState('Done');
-                  setAgentMessage("Task complete.");
-                  if (isVoice) speak("Task complete.");
+                  const terminalState = String(statusData.state || '').toLowerCase();
+                  const succeeded = terminalState === 'success';
+                  const message = statusData.error_details || statusData.thought || (succeeded ? "Task complete." : "Task failed before completion.");
+                  setUiState(succeeded ? 'Done' : 'Error');
+                  setAgentMessage(message);
+                  if (isVoice) speak(message);
                   setLatestThought('');
                   setTimeout(() => {
                     setAgentMessage('');
-                    setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+                    setUiState('Idle');
+                    setActiveTaskId(null);
                   }, 3000);
                 }
+              } else {
+                clearInterval(pollInterval);
+                setUiState('Error');
+                setAgentMessage('IRIS lost the task status. The automation result is unknown.');
+                setActiveTaskId(null);
               }
             } catch(e) {
               clearInterval(pollInterval);
-              setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+              setUiState('Idle');
             }
           }, 2000);
         }
+      } else {
+        const errorData = await autoResp.json().catch(() => ({}));
+        setUiState('Error');
+        setAgentMessage(errorData.detail || errorData.message || 'IRIS could not start the automation.');
       }
     } catch (err) {
-      setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+      setUiState('Idle');
       setAgentMessage("Error executing automation.");
       setTimeout(() => setAgentMessage(''), 3000);
     }
+  };
+
+  const toggleVoiceInput = () => {
+    if (recognition) {
+      recognition.stop();
+      setRecognition(null);
+      setUiState('Idle');
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setUiState('Error');
+      setAgentMessage('Voice recognition is not available in this Electron/Chrome runtime.');
+      setTimeout(() => {
+        setAgentMessage('');
+        setUiState('Idle');
+      }, 4000);
+      return;
+    }
+
+    const nextRecognition = new SpeechRecognition();
+    nextRecognition.continuous = false;
+    nextRecognition.interimResults = false;
+    nextRecognition.lang = 'en-IN';
+    nextRecognition.onstart = () => setUiState('Listening');
+    nextRecognition.onresult = (event: any) => {
+      const transcript = event.results?.[0]?.[0]?.transcript?.trim();
+      if (transcript) void processUnifiedCommand(transcript, true);
+    };
+    nextRecognition.onerror = (event: any) => {
+      setAgentMessage(`Voice input failed: ${event.error || 'microphone unavailable'}.`);
+      setUiState('Error');
+    };
+    nextRecognition.onend = () => {
+      setRecognition(null);
+      setUiState(previous => previous === 'Listening' ? 'Idle' : previous);
+    };
+    setRecognition(nextRecognition);
+    nextRecognition.start();
   };
 
   const handleChatSubmit = async (e?: React.FormEvent) => {
@@ -626,22 +769,6 @@ function BlobOverlay() {
     setChatInputText('');
     closeChat();
     await processUnifiedCommand(text, false);
-  };
-
-  const handleMicClick = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (uiState === 'Working' || uiState === 'Thinking') {
-        if (activeTaskId) {
-            try { await fetch(`http://127.0.0.1:8000/api/watch-and-strike/${activeTaskId}`, { method: 'DELETE' }); } catch(err) {}
-            setActiveTaskId(null);
-        }
-        setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-        setAgentMessage('Execution cancelled.');
-        setTimeout(() => setAgentMessage(''), 3000);
-        setLatestThought('');
-        return;
-    }
-    toggleMic(e);
   };
 
   const speak = (text: string) => {
@@ -671,7 +798,7 @@ function BlobOverlay() {
     let dismissTimeout: any = null;
     const fetchCompanionRemark = async () => {
       try {
-        const resp = await fetch('http://127.0.0.1:8000/api/companion/remarks');
+        const resp = await fetch(irisApiUrl('/api/companion/remarks'));
         if (resp.ok) {
           const data = await resp.json();
           if (data.remark) {
@@ -700,16 +827,31 @@ function BlobOverlay() {
   }, []);
 
   useEffect(() => {
-    let eventSource: EventSource | null = null;
-    let reconnectTimeout: any = null;
-    
-    let logEventSource: EventSource | null = null;
-    const connectLogSSE = () => {
-      if (logEventSource) logEventSource.close();
-      logEventSource = new EventSource('http://127.0.0.1:8000/api/logs/stream');
-      logEventSource.onmessage = (event) => {
+    const handleToggleChat = () => {
+      toggleChatBox();
+    };
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        toggleChatBox();
+      }
+    };
+    window.addEventListener('toggle-chat', handleToggleChat);
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => {
+      window.removeEventListener('toggle-chat', handleToggleChat);
+      window.removeEventListener('keydown', handleGlobalKeyDown);
+    };
+  }, [isChatOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let streamController: AbortController | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const handleLogData = (eventData: string) => {
         try {
-          const data = JSON.parse(event.data);
+          const data = JSON.parse(eventData);
           if (data.type === 'log') {
             const rawText = data.text || '';
             const rawLower = rawText.toLowerCase();
@@ -740,130 +882,53 @@ function BlobOverlay() {
                 }
             }
           }
-        } catch (e) {}
-      };
-      logEventSource.onerror = () => {
-        logEventSource?.close();
-        setTimeout(connectLogSSE, 3000);
-      };
+        } catch (error) {
+          console.warn('[IRIS] Ignoring malformed log event:', error);
+        }
     };
-    connectLogSSE();
 
-    const connectSSE = () => {
-      if (eventSource) {
-        eventSource.close();
-      }
-      
-      eventSource = new EventSource('http://127.0.0.1:8000/api/mic/events');
-      
-      eventSource.onopen = () => {
-        console.log("Connected to Mic SSE");
-      };
-
-      const handleMessage = async (event: any) => {
+    const connectLogSSE = async () => {
+      streamController?.abort();
+      streamController = new AbortController();
       try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'ghost_mouse') {
-          setGhostMousePos({ x: data.x, y: data.y });
-          setTimeout(() => setGhostMousePos(null), 2000); // Hide after 2 seconds
-          return;
-        }
-        if (data.type === 'heard') {
-          const rawText = (data.text || '').trim();
-          if (!rawText) return;
-          const text = rawText.toLowerCase().replace(/[^\w\s]/gi, '').replace(/\s+/g, ' ');
-          if (!text) return;
-
-          // Strict Wake-word requirement: Only execute if "iris" (or phonetic variations) is in the command
-          const hasWakeWord = text.includes('iris') || /\b(iris|ires|iriss|irish|ayris|isis|eyris)\b/i.test(rawText) || /\b(iris|ires|iriss|irish|ayris|isis|eyris)\b/i.test(text);
-          if (!hasWakeWord) {
-            // Completely ignore ambient speech/room talk unless addressed to "iris"
-            return;
+        const response = await fetch(irisApiUrl('/api/logs/stream'), {
+          signal: streamController.signal,
+          headers: { Accept: 'text/event-stream' },
+        });
+        if (!response.ok || !response.body) throw new Error(`Log stream returned ${response.status}`);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (!cancelled) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split('\n\n');
+          buffer = events.pop() || '';
+          for (const eventBlock of events) {
+            const dataLine = eventBlock.split('\n').find(line => line.startsWith('data:'));
+            if (dataLine) handleLogData(dataLine.slice(5).trim());
           }
-
-          console.log("[Mic Heard]:", rawText);
-
-          // Clean wake words to extract actual command
-          const cleaned = rawText
-            .replace(/\b(hey|hi|hello|ok|okay)?\s*(iris|ires|iriss|irish|ayris|isis|eyris)\b[,:]?\s*/gi, '')
-            .trim();
-          const cleanedLower = cleaned.toLowerCase().replace(/[^\w\s]/gi, '').trim();
-
-          // Check if purely a greeting or check-in
-          const isGreeting = !cleaned || (['hi', 'hello', 'hey', 'are you there', 'can you hear me', 'yo', 'sup'].includes(cleanedLower));
-          if (isGreeting) {
-            const msg = "Yes, I can hear you! How can I help?";
-            playPopSound();
-            setAgentMessage(msg);
-            speak(msg);
-            setTimeout(() => setAgentMessage(''), 4000);
-            return;
-          }
-
-          // Execute command via unified engine with spoken voice feedback
-          await processUnifiedCommand(cleaned, true);
         }
-      } catch (e) {
-        console.error("SSE parse error", e);
+      } catch (error) {
+        if (!cancelled && !(error instanceof DOMException && error.name === 'AbortError')) {
+          reconnectTimer = setTimeout(() => void connectLogSSE(), 3000);
+        }
       }
-      };
-
-      eventSource.onmessage = handleMessage;
-
-      eventSource.onerror = () => {
-        console.error("SSE disconnected. Reconnecting in 3s...");
-        eventSource?.close();
-        reconnectTimeout = setTimeout(connectSSE, 3000);
-      };
     };
-
-    connectSSE();
+    void connectLogSSE();
 
     return () => {
-      if (eventSource) eventSource.close();
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      cancelled = true;
+      streamController?.abort();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
     };
   }, []);
-
-  // Auto-clear the thought bubble after 4 seconds of inactivity
-  useEffect(() => {
-    if (latestThought) {
-      const timer = setTimeout(() => {
-        setLatestThought("");
-      }, 4000);
-      return () => clearTimeout(timer);
-    }
-  }, [latestThought]);
-
-  useEffect(() => {
-    if (uiState === 'Idle' && activePipelines.length === 0) {
-      setLatestThought('');
-    }
-  }, [uiState, activePipelines.length]);
-
-  const toggleMic = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!isMicOnRef.current) {
-      setIsMicOn(true);
-      isMicOnRef.current = true;
-      setUiState('Listening');
-      try {
-        await fetch('http://127.0.0.1:8000/api/mic/start', { method: 'POST' });
-      } catch(e) {}
-    } else {
-      setIsMicOn(false);
-      isMicOnRef.current = false;
-      setUiState('Idle');
-      try {
-        await fetch('http://127.0.0.1:8000/api/mic/stop', { method: 'POST' });
-      } catch(e) {}
-    }
-  };
 
   useEffect(() => {
     const checkPipelines = async () => {
       try {
-        const res = await fetch('http://127.0.0.1:8000/api/pipelines');
+        const res = await fetch(irisApiUrl('/api/pipelines'));
         if (res.ok) {
           const data = await res.json();
           if (data.pipelines) {
@@ -872,29 +937,30 @@ function BlobOverlay() {
                const task = data.pipelines.find((p: any) => p.task_id === activeTaskId);
                if (task) {
                  if (task.thought) setLatestThought(task.thought);
-                 if (task.current_action && task.current_action !== task.thought) {
-                   setAgentMessage(task.current_action);
+                 if (task.current_step && task.current_step !== task.thought) {
+                   setAgentMessage(task.current_step);
                  }
-                 if (task.status === 'Success' || task.status === 'finished') {
+                 if (task.state === 'success') {
                    setUiState('Done');
                    setLatestThought(task.thought || "Task complete.");
                    setAgentMessage(task.thought || "Task completed successfully!");
                    setTimeout(() => {
                      setAgentMessage('');
                      setLatestThought('');
-                     setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
+                     setUiState('Idle');
                      setActiveTaskId(null);
                    }, 4000);
+                 } else if (task.state === 'failed' || task.state === 'cancelled') {
+                   setUiState('Error');
+                   setLatestThought(task.error_details || task.thought || "Task failed.");
+                   setAgentMessage(task.error_details || task.thought || "Task failed before completion.");
+                   setTimeout(() => {
+                     setAgentMessage('');
+                     setLatestThought('');
+                     setUiState('Idle');
+                     setActiveTaskId(null);
+                   }, 5000);
                  }
-               } else if (data.pipelines.length === 0 && uiState === 'Working') {
-                 setUiState('Done');
-                 setAgentMessage("Task completed successfully!");
-                 setTimeout(() => {
-                   setAgentMessage('');
-                   setLatestThought('');
-                   setUiState(isMicOnRef.current ? 'Listening' : 'Idle');
-                   setActiveTaskId(null);
-                 }, 3000);
                }
              } else if (data.pipelines.length > 0) {
                const latest = data.pipelines[0];
@@ -1008,28 +1074,13 @@ function BlobOverlay() {
   const distBottom = window.innerHeight - pos.y;
   const minEdge = Math.min(distLeft, distRight, distTop, distBottom);
 
-  let micStyle: React.CSSProperties = {
-      position: 'absolute',
-      background: 'transparent',
-      border: 'none',
-      width: '28px', height: '28px',
-      display: (isHovered || isMicOn || isChatOpen || uiState !== 'Idle') ? 'flex' : 'none',
-      justifyContent: 'center', alignItems: 'center',
-      cursor: 'pointer',
-      pointerEvents: 'auto',
-      color: isMicOn ? '#ff3232' : 'white',
-      zIndex: 10005,
-      transition: 'all 0.2s',
-      filter: isMicOn ? 'drop-shadow(0 0 8px rgba(255, 50, 50, 0.8))' : 'drop-shadow(0 2px 4px rgba(0,0,0,0.5))'
-  };
-
-  let chatToggleStyle: React.CSSProperties = {
+  const chatToggleStyle: React.CSSProperties = {
       position: 'absolute',
       background: isChatOpen ? 'rgba(0, 229, 255, 0.25)' : 'transparent',
       border: isChatOpen ? '1px solid #00e5ff' : 'none',
       borderRadius: '50%',
       width: '28px', height: '28px',
-      display: (isHovered || isChatOpen || isMicOn || uiState !== 'Idle') ? 'flex' : 'none',
+      display: (isHovered || isChatOpen || uiState !== 'Idle') ? 'flex' : 'none',
       justifyContent: 'center', alignItems: 'center',
       cursor: 'pointer',
       pointerEvents: 'auto',
@@ -1039,7 +1090,7 @@ function BlobOverlay() {
       filter: isChatOpen ? 'drop-shadow(0 0 8px rgba(0, 229, 255, 0.8))' : 'drop-shadow(0 2px 4px rgba(0,0,0,0.5))'
   };
 
-  let chatBoxContainerStyle: React.CSSProperties = {
+  const chatBoxContainerStyle: React.CSSProperties = {
       position: 'absolute',
       background: 'rgba(10, 15, 25, 0.98)',
       border: '1px solid rgba(0, 229, 255, 0.45)',
@@ -1056,7 +1107,7 @@ function BlobOverlay() {
       transition: 'opacity 0.15s ease, transform 0.15s ease'
   };
 
-  let chatStyle: React.CSSProperties = {
+  const chatStyle: React.CSSProperties = {
     position: 'absolute',
     background: 'rgba(10, 15, 25, 0.96)',
     border: '1px solid rgba(0, 229, 255, 0.4)',
@@ -1081,7 +1132,7 @@ function BlobOverlay() {
     transition: 'all 0.15s ease'
   };
   
-  let chatPointerStyle: React.CSSProperties = {
+  const chatPointerStyle: React.CSSProperties = {
     position: 'absolute',
     width: '10px',
     height: '10px',
@@ -1090,71 +1141,67 @@ function BlobOverlay() {
     borderRight: '1px solid rgba(0, 229, 255, 0.4)'
   };
   
-  let bubblesContainerStyle: React.CSSProperties = {
+  const bubblesContainerStyle: React.CSSProperties = {
     position: 'absolute',
     display: 'flex',
     gap: '10px',
     pointerEvents: 'auto',
   };
   
-  let bubbleTextStyle: React.CSSProperties = {
+  const bubbleTextStyle: React.CSSProperties = {
     position: 'absolute',
   };
 
   // The parent container is (BLOB_RADIUS + 40)*2 = 120x120. The core is 40x40 in the center.
   if (minEdge === distRight) {
-    micStyle.top = '30%'; micStyle.left = '-28px'; micStyle.transform = 'translateY(-50%)';
-    chatToggleStyle.top = '70%'; chatToggleStyle.left = '-28px'; chatToggleStyle.transform = 'translateY(-50%)';
-    chatBoxContainerStyle.top = '50%'; chatBoxContainerStyle.right = '100%'; chatBoxContainerStyle.marginRight = '35px'; chatBoxContainerStyle.transform = 'translateY(-50%)';
+    chatToggleStyle.top = '50%'; chatToggleStyle.left = '10px'; chatToggleStyle.transform = 'translateY(-50%)';
+    chatBoxContainerStyle.top = '50%'; chatBoxContainerStyle.right = '100%'; chatBoxContainerStyle.marginRight = '12px'; chatBoxContainerStyle.transform = 'translateY(-50%)';
     
     if (isChatOpen) {
-      chatStyle.bottom = 'calc(50% + 28px)'; chatStyle.right = '100%'; chatStyle.marginRight = '35px'; chatStyle.transform = 'none';
+      chatStyle.bottom = 'calc(50% + 28px)'; chatStyle.right = '100%'; chatStyle.marginRight = '12px'; chatStyle.transform = 'none';
       chatPointerStyle.bottom = '-6px'; chatPointerStyle.right = '20px'; chatPointerStyle.transform = 'rotate(45deg)';
     } else {
-      chatStyle.top = '50%'; chatStyle.right = '100%'; chatStyle.marginRight = '35px'; chatStyle.transform = 'translateY(-50%)';
+      chatStyle.top = '50%'; chatStyle.right = '100%'; chatStyle.marginRight = '12px'; chatStyle.transform = 'translateY(-50%)';
       chatPointerStyle.top = '50%'; chatPointerStyle.right = '-6px'; chatPointerStyle.transform = 'translateY(-50%) rotate(-45deg)';
     }
     
     bubblesContainerStyle.top = 'calc(50% + 80px)'; bubblesContainerStyle.right = '120%'; bubblesContainerStyle.transform = 'translateY(-50%)'; bubblesContainerStyle.flexDirection = 'column';
     bubbleTextStyle.top = '50%'; bubbleTextStyle.right = '32px'; bubbleTextStyle.transform = 'translateY(-50%)';
   } else if (minEdge === distLeft) {
-    micStyle.top = '30%'; micStyle.right = '-28px'; micStyle.transform = 'translateY(-50%)';
-    chatToggleStyle.top = '70%'; chatToggleStyle.right = '-28px'; chatToggleStyle.transform = 'translateY(-50%)';
-    chatBoxContainerStyle.top = '50%'; chatBoxContainerStyle.left = '100%'; chatBoxContainerStyle.marginLeft = '35px'; chatBoxContainerStyle.transform = 'translateY(-50%)';
+    chatToggleStyle.top = '50%'; chatToggleStyle.right = '10px'; chatToggleStyle.transform = 'translateY(-50%)';
+    chatBoxContainerStyle.top = '50%'; chatBoxContainerStyle.left = '100%'; chatBoxContainerStyle.marginLeft = '12px'; chatBoxContainerStyle.transform = 'translateY(-50%)';
     
     if (isChatOpen) {
-      chatStyle.bottom = 'calc(50% + 28px)'; chatStyle.left = '100%'; chatStyle.marginLeft = '35px'; chatStyle.transform = 'none';
+      chatStyle.bottom = 'calc(50% + 28px)'; chatStyle.left = '100%'; chatStyle.marginLeft = '12px'; chatStyle.transform = 'none';
       chatPointerStyle.bottom = '-6px'; chatPointerStyle.left = '20px'; chatPointerStyle.transform = 'rotate(45deg)';
     } else {
-      chatStyle.top = '50%'; chatStyle.left = '100%'; chatStyle.marginLeft = '35px'; chatStyle.transform = 'translateY(-50%)';
+      chatStyle.top = '50%'; chatStyle.left = '100%'; chatStyle.marginLeft = '12px'; chatStyle.transform = 'translateY(-50%)';
       chatPointerStyle.top = '50%'; chatPointerStyle.left = '-6px'; chatPointerStyle.transform = 'translateY(-50%) rotate(135deg)';
     }
     
     bubblesContainerStyle.top = 'calc(50% + 80px)'; bubblesContainerStyle.left = '120%'; bubblesContainerStyle.transform = 'translateY(-50%)'; bubblesContainerStyle.flexDirection = 'column';
     bubbleTextStyle.top = '50%'; bubbleTextStyle.left = '32px'; bubbleTextStyle.transform = 'translateY(-50%)';
   } else if (minEdge === distTop) {
-    micStyle.bottom = '-28px'; micStyle.left = '35%'; micStyle.transform = 'translateX(-50%)';
-    chatToggleStyle.bottom = '-28px'; chatToggleStyle.left = '65%'; chatToggleStyle.transform = 'translateX(-50%)';
-    chatBoxContainerStyle.top = '100%'; chatBoxContainerStyle.left = '50%'; chatBoxContainerStyle.marginTop = '35px'; chatBoxContainerStyle.transform = 'translateX(-50%)';
+    chatToggleStyle.bottom = '10px'; chatToggleStyle.left = '50%'; chatToggleStyle.transform = 'translateX(-50%)';
+    chatBoxContainerStyle.top = '100%'; chatBoxContainerStyle.left = '50%'; chatBoxContainerStyle.marginTop = '12px'; chatBoxContainerStyle.transform = 'translateX(-50%)';
     
     if (isChatOpen) {
-      chatStyle.top = 'calc(100% + 55px)'; chatStyle.left = '50%'; chatStyle.marginTop = '35px'; chatStyle.transform = 'translateX(-50%)';
+      chatStyle.top = 'calc(100% + 55px)'; chatStyle.left = '50%'; chatStyle.marginTop = '12px'; chatStyle.transform = 'translateX(-50%)';
     } else {
-      chatStyle.top = '100%'; chatStyle.left = '50%'; chatStyle.marginTop = '35px'; chatStyle.transform = 'translateX(-50%)';
+      chatStyle.top = '100%'; chatStyle.left = '50%'; chatStyle.marginTop = '12px'; chatStyle.transform = 'translateX(-50%)';
     }
     chatPointerStyle.top = '-6px'; chatPointerStyle.left = '50%'; chatPointerStyle.transform = 'translateX(-50%) rotate(-135deg)';
     bubblesContainerStyle.top = '120%'; bubblesContainerStyle.left = 'calc(50% + 80px)'; bubblesContainerStyle.transform = 'translateX(-50%)'; bubblesContainerStyle.flexDirection = 'row';
     bubbleTextStyle.top = '32px'; bubbleTextStyle.left = '50%'; bubbleTextStyle.transform = 'translateX(-50%)';
   } else {
     // Bottom edge (default)
-    micStyle.top = '-28px'; micStyle.left = '35%'; micStyle.transform = 'translateX(-50%)';
-    chatToggleStyle.top = '-28px'; chatToggleStyle.left = '65%'; chatToggleStyle.transform = 'translateX(-50%)';
-    chatBoxContainerStyle.bottom = '100%'; chatBoxContainerStyle.left = '50%'; chatBoxContainerStyle.marginBottom = '35px'; chatBoxContainerStyle.transform = 'translateX(-50%)';
+    chatToggleStyle.top = '10px'; chatToggleStyle.left = '50%'; chatToggleStyle.transform = 'translateX(-50%)';
+    chatBoxContainerStyle.bottom = '100%'; chatBoxContainerStyle.left = '50%'; chatBoxContainerStyle.marginBottom = '12px'; chatBoxContainerStyle.transform = 'translateX(-50%)';
     
     if (isChatOpen) {
-      chatStyle.bottom = 'calc(100% + 55px)'; chatStyle.left = '50%'; chatStyle.marginBottom = '35px'; chatStyle.transform = 'translateX(-50%)';
+      chatStyle.bottom = 'calc(100% + 55px)'; chatStyle.left = '50%'; chatStyle.marginBottom = '12px'; chatStyle.transform = 'translateX(-50%)';
     } else {
-      chatStyle.bottom = '100%'; chatStyle.left = '50%'; chatStyle.marginBottom = '35px'; chatStyle.transform = 'translateX(-50%)';
+      chatStyle.bottom = '100%'; chatStyle.left = '50%'; chatStyle.marginBottom = '12px'; chatStyle.transform = 'translateX(-50%)';
     }
     chatPointerStyle.bottom = '-6px'; chatPointerStyle.left = '50%'; chatPointerStyle.transform = 'translateX(-50%) rotate(45deg)';
     bubblesContainerStyle.bottom = '120%'; bubblesContainerStyle.left = 'calc(50% + 80px)'; bubblesContainerStyle.transform = 'translateX(-50%)'; bubblesContainerStyle.flexDirection = 'row';
@@ -1236,6 +1283,7 @@ function BlobOverlay() {
           .blob-core.state-Thinking { animation: pulse-thinking 1s infinite ease-in-out; background: radial-gradient(circle at 30% 30%, rgba(200,100,255,1) 0%, rgba(138,43,226,1) 100%); }
           .blob-core.state-Working { animation: pulse-working 0.5s infinite ease-in-out; background: radial-gradient(circle at 30% 30%, rgba(255,200,100,1) 0%, rgba(255,140,0,1) 100%); }
           .blob-core.state-Done { animation: pulse-done 2s infinite ease-in-out; background: radial-gradient(circle at 30% 30%, rgba(100,255,150,1) 0%, rgba(46,204,113,1) 100%); }
+          .blob-core.state-Error { animation: pulse-listening 1.5s infinite ease-in-out; background: radial-gradient(circle at 30% 30%, rgba(255,110,110,1) 0%, rgba(175,25,45,1) 100%); }
           
           @keyframes pulse-listening {
             0%, 100% { box-shadow: 0 0 15px rgba(255, 50, 50, 0.6), inset 0 0 10px rgba(255, 50, 50, 0.4); }
@@ -1363,7 +1411,7 @@ function BlobOverlay() {
                 <span style={{ wordBreak: 'break-word' }}>{latestThought}</span>
               </div>
             )}
-            {agentMessage && !latestThought && <span>{agentMessage}</span>}
+            {agentMessage && <span>{agentMessage}</span>}
             <div style={chatPointerStyle} />
           </div>
         )}
@@ -1418,7 +1466,7 @@ function BlobOverlay() {
                       <div 
                         onClick={(e) => {
                           e.stopPropagation();
-                          fetch(`http://127.0.0.1:8000/api/watch-and-strike/${pipeline.task_id}`, { method: 'DELETE' });
+                          fetch(irisApiUrl(`/api/watch-and-strike/${pipeline.task_id}`), { method: 'DELETE' });
                         }}
                         onPointerDown={(e) => e.stopPropagation()}
                         onPointerUp={(e) => e.stopPropagation()}
@@ -1450,7 +1498,7 @@ function BlobOverlay() {
                     {pipeline.mode && pipeline.mode.startsWith('sandbox') && (
                       <div style={{ marginTop: '8px', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(0, 229, 255, 0.3)', background: '#000' }}>
                         <img 
-                          src={`http://127.0.0.1:8000/api/sandbox/frame/IRIS_Room_${pipeline.task_id.slice(-6)}?t=${frameTick}`}
+                          src={irisApiUrl(`/api/sandbox/frame/IRIS_Room_${pipeline.task_id.slice(-6)}?t=${frameTick}`)}
                           alt="Sandbox Preview" 
                           style={{ width: '100%', maxHeight: '120px', objectFit: 'contain', display: 'block' }}
                           onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
@@ -1515,6 +1563,25 @@ function BlobOverlay() {
                 fontFamily: "'Outfit', sans-serif"
               }}
             />
+            <button
+              type="button"
+              onClick={toggleVoiceInput}
+              style={{
+                background: recognition ? 'rgba(255, 80, 100, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+                border: recognition ? '1px solid rgba(255, 80, 100, 0.5)' : '1px solid rgba(255, 255, 255, 0.18)',
+                borderRadius: '50%',
+                width: '24px',
+                height: '24px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: recognition ? '#ff6b7d' : 'rgba(255, 255, 255, 0.7)',
+                cursor: 'pointer'
+              }}
+              title={recognition ? 'Stop listening' : 'Speak command'}
+            >
+              {recognition ? <MicOff size={11} /> : <Mic size={11} />}
+            </button>
             <button 
               type="submit" 
               style={{
@@ -1560,20 +1627,6 @@ function BlobOverlay() {
           title={isChatOpen ? 'Close Chat' : 'Type Order / Chat'}
         >
           <MessageSquare size={13} />
-        </div>
-
-        {/* Floating Mic Toggle attached directly to the Blob */}
-        <div 
-          onClick={handleMicClick}
-          onPointerDown={e => e.stopPropagation()}
-          onPointerUp={e => e.stopPropagation()}
-          style={micStyle}
-          title={uiState === 'Working' || uiState === 'Thinking' ? 'Voice Command' : 'Voice Command'}
-        >
-          {uiState === 'Thinking' ? <Brain size={14} className="spin-slow" /> : 
-           uiState === 'Working' ? <Zap size={14} className="pulse-fast" /> : 
-           uiState === 'Done' ? <CheckCircle2 size={14} /> : 
-           <Mic size={14} />}
         </div>
       </div>
       {/* Ghost Mouse Overlay */}
@@ -1628,7 +1681,7 @@ export default function App() {
   useEffect(() => {
     const checkPipelines = async () => {
       try {
-        const resp = await fetch('http://127.0.0.1:8000/api/pipelines');
+        const resp = await fetch(irisApiUrl('/api/pipelines'));
         if (resp.ok) {
           const data = await resp.json();
           setActivePipelines(data.pipelines || []);
@@ -1693,13 +1746,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, []);
 
-  if (route === '#/search') {
-    return <SearchOverlay />;
-  }
-  if (route === '#/blob') {
-    return <BlobOverlay />;
-  }
-
   const getDynamicGreeting = () => {
     const hour = new Date().getHours();
     if (hour >= 5 && hour < 12) return 'Good morning';
@@ -1718,7 +1764,7 @@ export default function App() {
   useEffect(() => {
     const fetchOverviewRemark = async () => {
       try {
-        const resp = await fetch('http://127.0.0.1:8000/api/companion/remarks');
+        const resp = await fetch(irisApiUrl('/api/companion/remarks'));
         if (resp.ok) {
           const data = await resp.json();
           if (data.remark) {
@@ -1732,7 +1778,6 @@ export default function App() {
     const interval = setInterval(fetchOverviewRemark, 300000);
     return () => clearInterval(interval);
   }, []);
-  const [apiKey, setApiKey] = useState(import.meta.env.VITE_GEMINI_API_KEY || '');
   const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'agent', text: string, sessionContext?: any, matchedUrl?: string, matchedFile?: string, actions?: any[] }[]>([
     { role: 'agent', text: 'Hello! I am your autonomous agent. I am silently capturing your workflow context. Ask me anything about what you were doing or what files you were editing!' }
   ]);
@@ -1747,16 +1792,10 @@ export default function App() {
     setIsAiTyping(true);
 
     try {
-      if (!apiKey) {
-        setChatHistory(prev => [...prev, { role: 'agent', text: "Please enter your Gemini API Key in the box below to activate my AI brain!" }]);
-        setIsAiTyping(false);
-        return;
-      }
-
-      const agent = new TimelineAgent(apiKey);
+      const agent = new TimelineAgent();
       const result = await agent.generateResponse(userMsg, sessions);
 
-      let actions: any[] = [];
+      const actions: any[] = [];
       let matchedUrl: string | undefined;
       let matchedFile: string | undefined;
 
@@ -1808,7 +1847,7 @@ export default function App() {
     // 1. Fetch persistent SQLite sessions on app launch
     const loadSavedSessions = async () => {
       try {
-        const resp = await fetch('http://127.0.0.1:8000/api/timeline/sessions');
+        const resp = await fetch(irisApiUrl('/api/timeline/sessions'));
         if (resp.ok) {
           const data = await resp.json();
           if (data.sessions && data.sessions.length > 0) {
@@ -1827,7 +1866,7 @@ export default function App() {
       (window as any).electronAPI.onWorkflowUpdate((update: any) => {
         setSessions(prev => {
           const idx = prev.findIndex(s => s.id === update.id);
-          let newSessions = [];
+          let newSessions: any[];
           if (idx >= 0) {
             newSessions = [...prev];
             newSessions[idx] = update;
@@ -1836,7 +1875,7 @@ export default function App() {
           }
           
           // Learn habits & persist automatically into SQLite
-          fetch('http://127.0.0.1:8000/api/companion/learn', {
+          fetch(irisApiUrl('/api/companion/learn'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sessions: newSessions })
@@ -1851,7 +1890,7 @@ export default function App() {
     // 3. Parallel Desktop Status Poller
     const checkParallelTask = async () => {
       try {
-        const pRes = await fetch('http://127.0.0.1:8000/api/parallel-desktop/status');
+        const pRes = await fetch(irisApiUrl('/api/parallel-desktop/status'));
         if (pRes.ok) {
           const pData = await pRes.json();
           setHasParallelTaskActive(Boolean(pData.has_active_task));
@@ -1889,7 +1928,7 @@ export default function App() {
     return app.replace('.exe', '').split(/(?=[A-Z])|[\s_-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
   };
 
-  let trails: any[] = [];
+  const trails: any[] = [];
   if (activeSession) {
     if (activeSession.urls) {
       const uniqueUrls = Array.from(new Set(activeSession.urls));
@@ -1959,6 +1998,13 @@ export default function App() {
 
   const originX = openingCoords ? openingCoords.x : 0;
   const originY = openingCoords ? openingCoords.y : 0;
+
+  if (route === '#/search') {
+    return <SearchOverlay />;
+  }
+  if (route === '#/blob') {
+    return <BlobOverlay />;
+  }
 
   return (
     <div 
@@ -2194,7 +2240,7 @@ export default function App() {
 
                 {/* Subtle Ambient Context Footer */}
                 <div style={{ marginTop: '48px', display: 'flex', gap: '24px', alignItems: 'center', color: 'rgba(255, 255, 255, 0.35)', fontSize: '11.5px' }}>
-                  <span>⚡ 0ms Win32 OS Hooks</span>
+                  <span>⚡ Native Win32 OS Hooks</span>
                   <span>•</span>
                   <span>🔒 Air-Gapped Local Memory</span>
                   <span>•</span>
@@ -2271,7 +2317,7 @@ export default function App() {
                             await (window as any).electronAPI.resumeWorkflow(payload);
                           } else {
                             try {
-                              await fetch('http://127.0.0.1:8000/api/ai/command', {
+                              await fetch(irisApiUrl('/api/ai/command'), {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ command: `open workspace ${payload.name}` })
@@ -2467,7 +2513,7 @@ export default function App() {
               <div className="chat-history">
                 {chatHistory.filter(msg => !msg.text.includes('[Meta-OS')).map((msg, i) => (
                   <div key={i} className={`chat-message ${msg.role}`}>
-                    <div className="chat-text" dangerouslySetInnerHTML={{ __html: msg.text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }} />
+                    <div className="chat-text">{renderSafeBoldText(msg.text)}</div>
                     
                     {msg.sessionContext && (
                       <div className="chat-context-card">

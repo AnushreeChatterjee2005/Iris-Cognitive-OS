@@ -1,9 +1,9 @@
-import { exec } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { shell } from 'electron';
-import { WorkflowSession } from '../../shared/types';
-import util from 'util';
+import { WorkflowSession } from '../shared/types';
+import { promisify } from 'util';
 
-const execAsync = util.promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // =============================================================================
 // IRIS Resume Engine (Layer 4)
@@ -117,11 +117,9 @@ export class ResumeEngine {
       for (const url of relevantUrls) {
         try {
           console.log(`[ResumeEngine] Opening tab: ${url}`);
-          shell.openExternal(url).catch(e => {
-            try { exec(`start "" "${url}"`); } catch (err) {}
-          });
-        } catch (e) {
-          try { exec(`start "" "${url}"`); } catch (err) {}
+          await shell.openExternal(url);
+        } catch (error) {
+          console.error(`[ResumeEngine] Could not open validated URL:`, error);
         }
         await new Promise(r => setTimeout(r, 120));
       }
@@ -163,12 +161,22 @@ export class ResumeEngine {
 
   private async resolveWindowsAppId(appName: string): Promise<string | null> {
     try {
-      // Clean string for regex matching
-      const cleanName = appName.replace(/[^a-zA-Z0-9 ]/g, '');
-      const command = `powershell.exe -NoProfile -Command "Get-StartApps | Where-Object { $_.Name -match '${cleanName}' } | Select-Object -First 1 -ExpandProperty AppID"`;
-      const { stdout } = await execAsync(command);
+      const cleanName = appName.replace(/[^a-zA-Z0-9 ._-]/g, '').trim().slice(0, 120);
+      if (!cleanName) return null;
+      const script = "$needle=$env:IRIS_APP_QUERY; Get-StartApps | Where-Object { $_.Name -like ('*' + $needle + '*') } | Select-Object -First 1 -ExpandProperty AppID";
+      const { stdout } = await execFileAsync('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        script,
+      ], {
+        env: { ...process.env, IRIS_APP_QUERY: cleanName },
+        windowsHide: true,
+        timeout: 5000,
+        maxBuffer: 16 * 1024,
+      });
       const appId = stdout.trim();
-      return appId || null;
+      return appId && appId.length <= 512 ? appId : null;
     } catch (e) {
       return null;
     }
@@ -188,9 +196,18 @@ export class ResumeEngine {
         // Expand IDE mappings here as needed
       }
 
-      exec(`${ideCmd} "${path}"`, (error) => {
-        if (error) shell.openPath(path);
-      });
+      try {
+        const child = spawn(ideCmd, [path], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+          shell: false,
+        });
+        child.once('error', () => void shell.openPath(path));
+        child.unref();
+      } catch {
+        await shell.openPath(path);
+      }
       return;
     }
 
@@ -198,7 +215,14 @@ export class ResumeEngine {
     const appId = await this.resolveWindowsAppId(path);
     if (appId) {
       console.log(`[ResumeEngine] Universally launching app: ${path} (AppID: ${appId})`);
-      exec(`explorer.exe shell:AppsFolder\\${appId}`);
+      const child = spawn('explorer.exe', [`shell:AppsFolder\\${appId}`], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        shell: false,
+      });
+      child.once('error', error => console.error('[ResumeEngine] App launch failed:', error));
+      child.unref();
       return;
     }
 

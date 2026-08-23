@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import initSqlJs from 'sql.js';
-import { ActivityEvent, Session } from '../../shared/types';
+import { ActivityEvent, Session } from '../shared/types';
 import { fileURLToPath } from 'url';
 
 // =============================================================================

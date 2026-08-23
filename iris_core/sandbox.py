@@ -357,7 +357,7 @@ def export_and_launch_sandbox_results(room_name: str, fallback_text: str = ""):
             f.write(final_content)
                 
         # Launch directly on user's primary interactive desktop!
-        subprocess.Popen(f'notepad.exe "{output_file}"', shell=True)
+        subprocess.Popen(["notepad.exe", output_file])
         return True
     except Exception as e:
         print(f"Failed to export sandbox results: {e}")

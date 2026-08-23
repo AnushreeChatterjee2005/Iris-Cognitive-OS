@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src 'self' data:; base-uri 'none'; form-action 'none'">
     <title>IRIS | Reconstruction & Orb Constellation</title>
     <style>
         :root {
@@ -496,7 +497,7 @@
     </div>
 
     <script>
-        const { ipcRenderer } = require('electron');
+        const irisBridge = window.electronAPI;
 
         // --- ORBITAL PHYSICS CANVAS (PAUSED WHEN NOT ACTIVE) ---
         const canvas = document.getElementById('orb-canvas');
@@ -535,7 +536,7 @@
             speed: Math.random() * 0.04 + 0.01
         }));
 
-        ipcRenderer.on('workflow-update', (event, workflowSession) => {
+        irisBridge.onWorkflowUpdate((workflowSession) => {
             nodes = [];
             
             // Center Sun (Workspace)
@@ -727,7 +728,7 @@
         }
 
         // Overlay Toggle Logic
-        ipcRenderer.on('toggle-overlay', () => {
+        irisBridge.onOverlayToggle(() => {
             if (document.body.classList.contains('active')) {
                 closeSequence();
             } else {
@@ -736,20 +737,19 @@
         });
 
         function openSequence() {
-            ipcRenderer.send('show-overlay-window');
             requestAnimationFrame(() => {
                 document.body.classList.add('active');
-                ipcRenderer.send('set-ignore-mouse', false);
+                irisBridge.overlaySetIgnoreMouse(false);
                 startCanvas();
             });
         }
 
         function closeSequence() {
             document.body.classList.remove('active');
-            ipcRenderer.send('set-ignore-mouse', true);
+            irisBridge.overlaySetIgnoreMouse(true);
             stopCanvas();
             setTimeout(() => {
-                ipcRenderer.send('hide-overlay-window');
+                irisBridge.overlayHide();
             }, 400);
         }
 
@@ -764,6 +764,12 @@
         const progressFill = document.getElementById('c-progress-fill');
         
         let cardCount = 0;
+
+        function escapeHTML(value) {
+            return String(value || '').replace(/[&<>"']/g, (character) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+            })[character]);
+        }
 
         function getCardIconMarkup(itemType, defaultIcon) {
             const t = (itemType || '').toLowerCase();
@@ -802,7 +808,7 @@
             }
             return `
                 <div class="mini-icon-glow">
-                    ${defaultIcon || '🚀'}
+                    ${escapeHTML(defaultIcon || '🚀')}
                 </div>
                 <div class="mini-code-lines">
                     <div class="mini-line accent" style="width: 65%;"></div>
@@ -811,7 +817,7 @@
             `;
         }
 
-        ipcRenderer.on('resume-sequence', (event, data) => {
+        irisBridge.onResumeSequence((data) => {
             if (data.type === 'start') {
                 // Ensure canvas is paused to maximize FPS for reconstruction
                 stopCanvas();
@@ -843,7 +849,7 @@
                             ${getCardIconMarkup(data.item, data.icon)}
                         </div>
                     </div>
-                    <div class="holo-subtitle" title="${data.message}">${data.message}</div>
+                    <div class="holo-subtitle" title="${escapeHTML(data.message)}">${escapeHTML(data.message)}</div>
                 `;
                 items.appendChild(card);
                 

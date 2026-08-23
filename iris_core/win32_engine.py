@@ -6,6 +6,7 @@ and Microsoft Excel COM integration for fast, zero-mouse cross-app automation.
 
 import sys
 import os
+import re
 import time
 import subprocess
 import ctypes
@@ -69,10 +70,20 @@ import win32con
 import win32api
 import win32process
 import psutil
-import pyperclip
-import pyautogui
 import concurrent.futures
-pyautogui.FAILSAFE = False
+from urllib.parse import quote_plus
+
+try:
+    import pyperclip
+except ImportError:
+    pyperclip = None
+
+try:
+    import pyautogui
+    if pyautogui:
+        pyautogui.FAILSAFE = False
+except ImportError:
+    pyautogui = None
 
 _desktop_enum_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="desktop_enum")
 
@@ -554,6 +565,24 @@ def find_browser_tab(keyword: str) -> bool:
         print(f"[Win32] find_browser_tab note: {e}")
     return False
 
+def _launch_trusted_registry_command(command: str) -> None:
+    """Launches a static APP_REGISTRY command without invoking a command shell."""
+    payload = command.strip()
+    if payload.lower().startswith("start "):
+        payload = payload[6:].strip()
+    if payload.startswith('""'):
+        payload = payload[2:].strip()
+
+    tokens = [quoted or plain for quoted, plain in re.findall(r'"([^"]*)"|(\S+)', payload)]
+    if not tokens:
+        raise ValueError("Empty trusted launcher command")
+
+    target = tokens[0]
+    if target.startswith(("http://", "https://")) or target.endswith(":"):
+        os.startfile(target)
+        return
+    subprocess.Popen(tokens)
+
 def resolve_and_open_app(app_query: str, args: str = "", thought_callback = None) -> dict:
     """
     4-Tier Smart App & Web Resolver:
@@ -600,14 +629,17 @@ def resolve_and_open_app(app_query: str, args: str = "", thought_callback = None
                 return {"success": True, "method": "tab", "details": f"Switched to browser tab matching '{tab_kw}'"}
 
     # Tier 3: Try launching native app cleanly (pick single best executable without duplicate loops)
-    exec_commands = matched_entry.get("exec_commands", []) if matched_entry else [f"start {query_clean} {args}".strip()]
-    cmd = exec_commands[0] if exec_commands else f"start {query_clean}"
+    # Only static registry commands are eligible for native launching.
+    # Unknown user-provided app names go directly to the encoded web fallback.
+    exec_commands = matched_entry.get("exec_commands", []) if matched_entry else []
+    cmd = exec_commands[0] if exec_commands else None
 
     try:
+        if not cmd:
+            raise FileNotFoundError("No trusted native launcher registered")
         if thought_callback:
             thought_callback(f"Launching {matched_key.title()} desktop app...")
-        full_cmd = f"{cmd} {args}".strip() if args else cmd
-        subprocess.Popen(full_cmd, shell=True)
+        _launch_trusted_registry_command(cmd)
 
         # Poll up to 2.5s for window to spawn and register
         for _ in range(12):
@@ -623,8 +655,7 @@ def resolve_and_open_app(app_query: str, args: str = "", thought_callback = None
     if len(exec_commands) > 1:
         fallback_cmd = exec_commands[1]
         try:
-            full_fallback = f"{fallback_cmd} {args}".strip() if args else fallback_cmd
-            subprocess.Popen(full_fallback, shell=True)
+            _launch_trusted_registry_command(fallback_cmd)
             for _ in range(10):
                 time.sleep(0.2)
                 hwnd = find_window_by_name(matched_key) or find_window_by_name(query_clean)
@@ -637,12 +668,12 @@ def resolve_and_open_app(app_query: str, args: str = "", thought_callback = None
     # Tier 4: Fallback to Web App URL in browser
     web_url = matched_entry.get("web_url") if matched_entry else None
     if not web_url and query_clean not in ["notepad", "settings", "terminal", "explorer", "task manager", "cmd", "powershell"]:
-        web_url = f"https://www.google.com/search?q={query_clean}"
+        web_url = f"https://www.google.com/search?q={quote_plus(query_clean)}"
 
     if web_url:
         if thought_callback:
             thought_callback(f"App not installed locally. Opening official web app: {web_url}")
-        subprocess.Popen(f'start "" "{web_url}"', shell=True)
+        os.startfile(web_url)
         return {"success": True, "method": "web", "url": web_url, "details": f"Opened web fallback '{web_url}'"}
 
     return {"success": False, "method": "none", "details": f"Could not locate or launch '{app_query}'"}

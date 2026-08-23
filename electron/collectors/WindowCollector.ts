@@ -1,7 +1,7 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
-import { ActivityEvent, CollectorCapabilities, WindowPayload } from '../../shared/types';
+import { ActivityEvent, CollectorCapabilities, WindowPayload } from '../shared/types';
 import { BaseCollector } from './BaseCollector';
 
 const execAsync = promisify(exec);
@@ -161,8 +161,10 @@ try {
     const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
 
     try {
-      const { stdout, stderr } = await execAsync(`powershell -EncodedCommand ${encodedScript}`);
-      if (stderr) console.error('[WindowCollector] PS Stderr:', stderr);
+      const { stdout, stderr } = await execAsync(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encodedScript}`);
+      if (stderr && !stderr.includes('#< CLIXML') && stderr.trim().length > 0) {
+        console.error('[WindowCollector] PS Stderr:', stderr);
+      }
       if (stdout.trim()) {
         try {
           // Find the JSON block in case of pollution

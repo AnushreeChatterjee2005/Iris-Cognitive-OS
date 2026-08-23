@@ -65,9 +65,12 @@ def dump_actionable_controls(window_control, max_elements: int = 200):
             auto.ControlType.ListItemControl: "ListItem"
         }
 
-        for c, depth in auto.WalkTree(window_control, getDepth=True):
-            if depth > 10:
-                continue
+        for tree_item in auto.WalkTree(
+            window_control,
+            getChildren=lambda control: control.GetChildren(),
+            maxDepth=30,
+        ):
+            c, depth = tree_item[0], tree_item[1]
             ctrl_type = c.ControlType
             if ctrl_type in target_types:
                 name = c.Name or ""

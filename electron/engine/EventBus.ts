@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { ActivityEvent, CollectorSource, EventType } from '../../shared/types';
+import { ActivityEvent, CollectorSource, EventType } from '../shared/types';
 
 // =============================================================================
 // IRIS Internal Event Bus

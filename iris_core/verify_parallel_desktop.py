@@ -55,17 +55,17 @@ def verify():
     
     print(f"  Launching autonomous task: \"{clean_goal}\"")
     task = parallel_engine.start_task(clean_goal, mode="autonomous")
-    print(f"  Task created with ID: {task.task_id} (Status: {task.status})")
+    print(f"  Task created with ID: {task.task_id} (State: {task.state})")
 
     # Wait for task to execute through steps
     max_wait = 15
     start_t = time.time()
-    while task.status in ["queued", "running"] and (time.time() - start_t < max_wait):
+    while task.state in ["queued", "running", "waiting"] and (time.time() - start_t < max_wait):
         time.sleep(0.5)
-        print(f"    -> Progress: {task.progress}% | Step: {task.current_step} | Status: {task.status}")
+        print(f"    -> Progress: {task.progress}% | Step: {task.current_step} | State: {task.state}")
 
-    print(f"\n  Final Task Status: {task.status} (Progress: {task.progress}%)")
-    assert task.status == "completed", f"Task did not complete, status is: {task.status}"
+    print(f"\n  Final Task State: {task.state} (Progress: {task.progress}%)")
+    assert task.state == "success", f"Task did not complete, state is: {task.state}"
     assert task.progress == 100
 
     # 4. Inspect Timeline & Results

@@ -1,6 +1,6 @@
 """
 IRIS Core: UIA Ghost Hook Engine
-Autonomous OS Accessibility controller powered by UIAutomation, Flash OCR, and Win32.
+Autonomous OS accessibility controller powered by UIAutomation, OpenAI vision, and Win32.
 """
 
 import json
@@ -9,8 +9,8 @@ import win32gui
 import win32con
 import win32api
 import uia_engine
-import ocr_engine
 import win32_engine
+from task_state import TaskState, transition_task_record
 
 def log_msg(task_id: str, msg: str):
     import watcher
@@ -42,7 +42,7 @@ def get_target_app_name(condition: str, task_id: str) -> str:
         if k in cond_lower:
             return v
 
-    # 2. Text LLM Fallback (Zero vision tokens)
+    # 2. OpenAI text classification fallback
     try:
         import watcher
         prompt = f"""You are a Semantic OS Ghost Agent.
@@ -50,7 +50,7 @@ User command: "{condition}"
 What is the target application name? Output ONLY a JSON object:
 {{"target_app_name": "name of the app (e.g. Chrome, Notepad, Spotify). Use null if none."}}
 """
-        resp = watcher.call_llm_with_retry('llama-3.3-70b-versatile', [prompt], task_id)
+        resp = watcher.call_llm_with_retry('openai', [prompt], task_id)
         cleaned = resp.text.strip().replace("```json", "").replace("```", "").strip()
         return json.loads(cleaned).get("target_app_name")
     except Exception:
@@ -105,9 +105,8 @@ def run_ghost_agent(task_id: str, condition: str, active_watchers: dict):
             success = uia_engine.set_control_value(edit_elem["control"], text_to_type)
             if success:
                 if task_id in active_watchers:
-                    active_watchers[task_id]["status"] = "Success"
-                    active_watchers[task_id]["active"] = False
                     active_watchers[task_id]["thought"] = f"Injected text into {edit_elem['name']} natively!"
+                    transition_task_record(active_watchers[task_id], TaskState.SUCCESS, current_step="Text injected")
                 return True
 
     # 2. Check for button click / invocation intent
@@ -125,21 +124,23 @@ def run_ghost_agent(task_id: str, condition: str, active_watchers: dict):
             success = uia_engine.invoke_control(matched["control"])
             if success:
                 if task_id in active_watchers:
-                    active_watchers[task_id]["status"] = "Success"
-                    active_watchers[task_id]["active"] = False
                     active_watchers[task_id]["thought"] = f"Invoked {matched['name']} via UIA Pattern!"
+                    transition_task_record(active_watchers[task_id], TaskState.SUCCESS, current_step="Control invoked")
                 return True
 
-    # 3. Flash OCR Spatial Fallback
-    log_msg(task_id, f"[{task_id}] UIA patterns inconclusive. Checking Flash OCR spatial coordinates...")
-    ocr_res = ocr_engine.find_text_coordinates(condition, hwnd=target_hwnd or 0)
-    if ocr_res:
+    # 3. OpenAI vision fallback after accessibility targeting fails.
+    log_msg(task_id, f"[{task_id}] UIA patterns inconclusive. Checking OpenAI visual grounding...")
+    try:
         import pyautogui
-        log_msg(task_id, f"[{task_id}] OCR snapped coordinate to ({ocr_res['cx']}, {ocr_res['cy']}). Executing click...")
-        pyautogui.click(ocr_res["cx"], ocr_res["cy"])
+        from vision_grounding import detect_element_with_vlm_vision
+        grounded = detect_element_with_vlm_vision(condition)
+    except Exception as exc:
+        log_msg(task_id, f"[{task_id}] OpenAI visual grounding failed: {exc}")
+        grounded = None
+    if grounded and isinstance(grounded.get("center_x"), int) and isinstance(grounded.get("center_y"), int):
+        pyautogui.click(grounded["center_x"], grounded["center_y"])
         if task_id in active_watchers:
-            active_watchers[task_id]["status"] = "Success"
-            active_watchers[task_id]["active"] = False
+            transition_task_record(active_watchers[task_id], TaskState.SUCCESS, current_step="Visually grounded control clicked")
         return True
 
     return False

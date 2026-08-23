@@ -1,13 +1,14 @@
 import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
-import { ActivityEvent, Session, WorkflowSession } from '../../shared/types';
+import { ActivityEvent, Session, WorkflowSession } from '../shared/types';
 import { WindowCollector } from '../collectors/WindowCollector';
 import { EventBus } from './EventBus';
+import { BACKEND_URL } from '../config';
 import { ActivityStore } from '../store/ActivityStore';
 import { ActivityGateway } from './ActivityGateway';
 import { ResumeEngine } from './ResumeEngine';
+import { authenticatedBackendFetch } from '../backendClient';
 
-const BACKEND_URL = 'http://127.0.0.1:8000';
 const INACTIVITY_SPLIT_MS = 10 * 60 * 1000; // 10 minutes of true inactivity before session split
 const MIN_PERSIST_DURATION_MS = 30 * 1000;  // 30s min duration to avoid ephemeral micro-clutter
 const EMBED_THROTTLE_MS = 15 * 1000;        // Throttle vector embeddings to once every 15s
@@ -238,7 +239,7 @@ export class ActivityEngine {
     // Throttled ChromaDB Embeddings (every 15s max during active typing/window switching)
     if (now - this.lastEmbedTime > EMBED_THROTTLE_MS) {
       this.lastEmbedTime = now;
-      fetch(`${BACKEND_URL}/memory/embed`, {
+      authenticatedBackendFetch(`${BACKEND_URL}/memory/embed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(liveSession)
@@ -265,7 +266,7 @@ export class ActivityEngine {
 
       // Attempt AI Name refinement if available
       try {
-        const res = await fetch(`${BACKEND_URL}/api/generate-name`, {
+        const res = await authenticatedBackendFetch(`${BACKEND_URL}/api/generate-name`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -324,7 +325,7 @@ export class ActivityEngine {
 
   async searchMemory(query: string) {
     try {
-      const response = await fetch(`${BACKEND_URL}/memory/search`, {
+      const response = await authenticatedBackendFetch(`${BACKEND_URL}/memory/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, limit: 5 })

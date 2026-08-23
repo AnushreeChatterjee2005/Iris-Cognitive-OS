@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { irisApiUrl } from './config';
 import {
   LayoutGrid,
   Layers,
@@ -101,7 +102,7 @@ const ICON_OPTIONS = [
 
 const roundNum = (n: number) => Math.round(n * 100) / 100;
 
-export function getAppTheme(nameOrId: string = '') {
+function getAppTheme(nameOrId: string = '') {
   const s = nameOrId.toLowerCase();
 
   if (s.includes('chrome') || s.includes('google') || s.includes('browser')) {
@@ -393,7 +394,7 @@ export function WorkspacesTab() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 2000);
 
-      const res = await fetch('http://127.0.0.1:8000/api/workspaces', {
+      const res = await fetch(irisApiUrl('/api/workspaces'), {
         signal: controller.signal
       });
       clearTimeout(timeoutId);
@@ -410,7 +411,7 @@ export function WorkspacesTab() {
 
   const fetchAvailableApps = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/workspaces/available-apps');
+      const res = await fetch(irisApiUrl('/api/workspaces/available-apps'));
       if (res.ok) {
         const data = await res.json();
         setAvailableApps(data.data || { running: [], installed: [], monitors: [] });
@@ -445,7 +446,7 @@ export function WorkspacesTab() {
     setActiveOpeningId(ws.id);
     showToast(`Restoring ${ws.name} workspace...`, 'info');
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/workspaces/${ws.id}/open`, {
+      const res = await fetch(irisApiUrl(`/api/workspaces/${ws.id}/open`), {
         method: 'POST'
       });
       if (res.ok) {
@@ -479,7 +480,7 @@ export function WorkspacesTab() {
   const handleToggleStartup = async (ws: Workspace) => {
     const nextState = !ws.startupEnabled;
     try {
-      await fetch(`http://127.0.0.1:8000/api/workspaces/${ws.id}/startup`, {
+      await fetch(irisApiUrl(`/api/workspaces/${ws.id}/startup`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: nextState })
@@ -493,7 +494,7 @@ export function WorkspacesTab() {
 
   const handleDuplicate = async (ws: Workspace) => {
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/workspaces/${ws.id}/duplicate`, {
+      const res = await fetch(irisApiUrl(`/api/workspaces/${ws.id}/duplicate`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: `${ws.name} (Copy)` })
@@ -509,7 +510,7 @@ export function WorkspacesTab() {
 
   const handleDelete = async (id: string) => {
     try {
-      await fetch(`http://127.0.0.1:8000/api/workspaces/${id}`, { method: 'DELETE' });
+      await fetch(irisApiUrl(`/api/workspaces/${id}`), { method: 'DELETE' });
       showToast('Workspace deleted.', 'info');
       setDeleteConfirmId(null);
       fetchWorkspaces();
@@ -521,7 +522,7 @@ export function WorkspacesTab() {
   const handleCaptureCurrentDesktop = async () => {
     showToast('Capturing live multi-window desktop coordinates...', 'info');
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/workspaces/current-layout');
+      const res = await fetch(irisApiUrl('/api/workspaces/current-layout'));
       if (res.ok) {
         const data = await res.json();
         if (data.workspace) {
@@ -536,14 +537,7 @@ export function WorkspacesTab() {
 
   const formatLastUsed = (timestamp?: number) => {
     if (!timestamp) return 'Never used';
-    const diff = Date.now() - timestamp;
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'Just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
+    return new Date(timestamp).toLocaleString();
   };
 
   return (
@@ -822,7 +816,7 @@ export function WorkspacesTab() {
           onSave={async (savedWs) => {
             try {
               if (editingWorkspace && editingWorkspace.id && !editingWorkspace.id.startsWith('ws-captured-')) {
-                const res = await fetch(`http://127.0.0.1:8000/api/workspaces/${editingWorkspace.id}`, {
+                const res = await fetch(irisApiUrl(`/api/workspaces/${editingWorkspace.id}`), {
                   method: 'PUT',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(savedWs)
@@ -830,7 +824,7 @@ export function WorkspacesTab() {
                 if (!res.ok) throw new Error('Failed to update');
                 showToast(`Workspace "${savedWs.name}" updated!`, 'success');
               } else {
-                const res = await fetch('http://127.0.0.1:8000/api/workspaces', {
+                const res = await fetch(irisApiUrl('/api/workspaces'), {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(savedWs)
@@ -950,8 +944,8 @@ function InteractiveDragSnapEditorModal({ initialWorkspace, availableApps, onClo
   const [selectedApps, setSelectedApps] = useState<WorkspaceApp[]>(initialWorkspace?.applications || []);
   
   const [activeTab, setActiveTab] = useState<'canvas' | 'details'>('canvas');
-  const runningList = availableApps.running || [];
-  const installedList = availableApps.installed || [];
+  const runningList = useMemo(() => availableApps.running || [], [availableApps.running]);
+  const installedList = useMemo(() => availableApps.installed || [], [availableApps.installed]);
 
   const [appSearch, setAppSearch] = useState('');
   const [appSourceTab, setAppSourceTab] = useState<'popular' | 'running' | 'installed'>(
@@ -983,12 +977,12 @@ function InteractiveDragSnapEditorModal({ initialWorkspace, availableApps, onClo
     const theme = getAppTheme(appItem.name || appItem.appIdentifier);
 
     setSelectedApps(prevApps => {
-      let updated = [...prevApps];
+      const updated = [...prevApps];
       const existingIdx = updated.findIndex(
         a => a.id === appItem.id || a.name.toLowerCase() === appItem.name.toLowerCase() || a.appIdentifier === appItem.appIdentifier
       );
 
-      let x = 0.0, y = 0.0, width = 0.5, height = 1.0;
+      let x: number, y: number, width: number, height: number;
 
       if (zone === 'left') {
         x = 0.0; y = 0.0; width = 0.5; height = 1.0;

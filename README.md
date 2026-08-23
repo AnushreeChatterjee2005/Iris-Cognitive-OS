@@ -1,86 +1,173 @@
-<div align="center">
-  <img src="public/sidebar-logo.png" alt="IRIS Logo" width="250">
-  
-  # IRIS: The Intelligence Layer Between You and Your OS
-  
-  **Universal OS Automation & Workflow Memory**  
-  *No APIs. No Integrations. If a human can see it and click it, IRIS can work with it.*
-</div>
+# IRIS
 
----
+IRIS is a Windows desktop automation prototype built with Electron, React, FastAPI, Playwright, Windows UI Automation, and the OpenAI Responses API.
 
-## ⚠️ The Fragmentation of OS-Level Automation
+It can execute natural-language desktop workflows, control websites through a dedicated browser profile, visually ground controls when semantic targeting fails, record workflow context, and run evidence-backed research tasks in a separate Windows desktop.
 
-- **The "State Loss" Problem:** Modern OS architectures are volatile state machines. They instantly drop contextual memory the second a user switches tasks, forcing humans to manually reconstruct complex workflows.
-- **The API Barrier:** Existing tools (Zapier, Make) rely on rigid, vendor-provided APIs. They are mathematically incapable of automating proprietary apps, local legacy software, or offline systems.
-- **Fragile Static RPA:** Traditional macro bots blindly click fixed coordinates. They lack "Visual Independence" and break instantly during UI updates or window resizing.
-- **The "Passive" OS Vulnerability:** Current operating systems blindly render pixels. They lack an "Intelligence Layer"—they cannot analyze the intent of a cross-app workflow without human intervention.
+IRIS is not a security sandbox and cannot guarantee that websites or applications will behave without affecting the host system. Sensitive and destructive actions require confirmation.
 
-## 🧠 What is IRIS?
+Evaluation references: [architecture](docs/ARCHITECTURE.md), [evaluation guide](EVALUATION.md), [security policy](SECURITY.md), and [deterministic scenarios](evaluation/scenarios.json).
 
-IRIS is an **Active Intelligence Layer** that sits natively between you and your Operating System. 
+## Architecture
 
-It completely bypasses vendor APIs, allowing you to pipe data from any application on your screen to any other application using natural language and visual intent. 
+The Electron renderer communicates only with the local FastAPI backend at `127.0.0.1`. Electron retrieves a per-launch authentication token through its isolated preload bridge. The renderer automatically adds that token to local backend requests.
 
-- **Ambient Memory:** Silently builds a permanent timeline of your cross-app workflow.
-- **Spatial UI:** Trigger a global overlay, draw connecting boxes, and type your rule.
-- **Event-Driven:** Watches for visual triggers and fires background OS events autonomously.
+Browser actions use this priority:
 
-## 🚀 The Three Execution Modes
+1. Playwright semantic DOM locators over Chrome DevTools Protocol (CDP)
+2. Windows accessibility and UI Automation controls
+3. OpenAI vision grounding
 
-### 1. NOW (Ad-Hoc Routing)
-Point at data on one app. Point at a form on another. Type: *"Extract this invoice and populate it."* IRIS maps the data fields semantically and uses OS accessibility hooks to fill the target instantly—without taking over your mouse.
+OCR is not part of the automation path. IRIS uses the DOM, accessibility APIs, and OpenAI vision.
 
-### 2. WHEN (Watch & Strike)
-The core event loop. Draw a trigger zone, draw a target arrow, and type *"When this says 'Success', click that button."* IRIS spins up an isolated background thread, polls the screen zone, and fires the click event autonomously upon a state match. You walk away from the keyboard.
+The bounded browser loop follows:
 
-### 3. ALWAYS (Continuous Sync) & TIMELINE (State Restoration)
-Keeps disconnected apps perfectly synced without network API calls. Simultaneously, IRIS logs your active environment into a local database. Use the query drawer to ask *"What file was I editing during my presentation review?"* to instantly restore an exact workspace.
-
----
-
-## 🛠️ Tech Stack & Architecture
-
-**The Three-Layer Hybrid Engine**
-
-IRIS ensures zero-ambiguity text and UI extraction by utilizing a 3-layer hybrid fallback system:
-1. **Layer 1 (The Web):** `Playwright` hooks directly into the browser DOM via CDP for perfect, zero-latency extraction.
-2. **Layer 2 (Native OS):** `pywinauto` leverages native Windows UI Automation APIs to read app structures as queryable objects and fire invisible background clicks (no cursor hijacking).
-3. **Layer 3 (Fallback Vision):** If an app blocks accessibility, IRIS gracefully falls back to `EasyOCR` for localized pixel extraction.
-
-**Core Infrastructure:**
-- **Frontend Overlay:** Electron, React, TypeScript.
-- **Core Engine:** Python daemon running a FastAPI server.
-- **Intent Engine:** Local LLMs (Llama 3 via Ollama) parse automation commands, while Gemini 2.5 Flash maps unstructured text fields.
-- **State Memory:** `ChromaDB` stores vector embeddings of past UI interactions to instantly resolve future routing commands.
-
-## ⚙️ Quick Start
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/AnushreeChatterjee2005/Iris-Cognitive-OS.git
-cd Iris-Cognitive-OS
-
-# 2. Install Frontend & Electron Dependencies
-npm install
-
-# 3. Setup Python Virtual Environment (Core Engine)
-python -m venv venv
-.\venv\Scripts\activate
-pip install -r requirements.txt
-
-# 4. Environment Variables
-# Create a .env file in the root directory and add your API keys:
-# VITE_GEMINI_API_KEY=your_gemini_key
-# GROQ_API_KEY=your_groq_key
-
-# 5. Start the Application
-
-> [!WARNING]
-> **Important Note on Starting the App:**
-> If you run `npm start`, it will automatically launch **both** the frontend and the Python backend in the background. **Do not run the python command manually if you use `npm start`! It is already running!**
-
-If you want to see the Python logs clearly in their own terminal (which is highly recommended for debugging):
-1. **Terminal 1 (Frontend):** Run `npm run dev`
-2. **Terminal 2 (Backend):** Run `cd iris_core` then `python -m uvicorn main:app`
+```text
+capture → understand → act → capture → verify
 ```
+
+It stops on verified success, cancellation, timeout, maximum steps, repeated state, end of page, login walls, captchas, blocked pages, or action-verification failure.
+
+## Task contract
+
+All new automation tasks use these states:
+
+```text
+queued → running ↔ waiting → success | failed | cancelled
+```
+
+Terminal states cannot transition back to running. Task responses include timestamps, progress, retry count, cancellation state, error details, timeline events, and verification evidence.
+
+## Security model
+
+- Backend and activity-gateway services bind to `127.0.0.1`.
+- CORS accepts only configured Electron/Vite origins.
+- FastAPI generates a cryptographically secure token for every backend launch.
+- Electron receives the token through preload IPC; it is not embedded in the frontend bundle.
+- Protected backend and activity-gateway requests require the token.
+- The bundled Chrome extension has a stable ID and is the only browser-extension origin accepted by the gateway.
+- Request bodies, command lengths, URLs, content types, and event schemas are validated.
+- Mutating routes have body-size and rate limits.
+- Process launches use structured arguments instead of user-controlled shell strings.
+- Sensitive commands require explicit confirmation.
+- `.env`, launch tokens, credentials, and API keys must never be committed.
+
+The launch token is stored for the current Windows user at `%LOCALAPPDATA%\IRIS\launch-token` and is replaced whenever the backend starts.
+
+The public, secret-safe `GET /api/readiness` endpoint reports prerequisite booleans and the automation/security contracts for machine evaluation.
+
+## Setup
+
+Requirements:
+
+- Windows 10 or 11
+- Node.js
+- Python 3.12
+- Chrome or Edge
+- An OpenAI API key for planning, vision, and research synthesis
+
+Install dependencies:
+
+```powershell
+npm install
+py -3.12 -m pip install -r requirements.txt
+py -3.12 -m playwright install chromium
+```
+
+Copy `.env.example` to a root `.env` file and add the API key:
+
+```dotenv
+OPENAI_API_KEY=your_key_here
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_VISION_MODEL=gpt-4o
+```
+
+Optional configuration:
+
+```dotenv
+IRIS_TRUSTED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,null
+IRIS_RATE_LIMIT_REQUESTS=120
+IRIS_VISION_DEBUG=0
+```
+
+Do not use `VITE_OPENAI_API_KEY`; IRIS keeps OpenAI calls in the Python backend.
+
+## Running IRIS
+
+Start the backend, Vite, and Electron together:
+
+```powershell
+npm start
+```
+
+For troubleshooting, `npm run backend` and `npm run dev` can be run in separate terminals. The Vite Electron plugin starts the desktop shell during development.
+
+IRIS uses strict local ports (`8000`, `5173`, and `32000`) and a single Electron instance. Close any older IRIS process before starting a fresh demo; startup now fails fast instead of silently switching ports.
+
+The browser automation service connects to `http://127.0.0.1:9222`. If no compatible browser is listening, it launches Chrome or Edge with a dedicated profile at `%LOCALAPPDATA%\IRIS\browser-profile`.
+
+Parallel Desktop research uses port `9223` and its own profile under `iris_core/parallel_storage`.
+
+## Browser task API
+
+`POST /api/browser/tasks` requires an objective and at least one explicit success criterion:
+
+```json
+{
+  "objective": "Open the documentation and find the installation section",
+  "initial_url": "https://example.com/docs",
+  "expected_text": "Installation",
+  "max_steps": 20,
+  "max_retries_per_action": 2,
+  "total_timeout_seconds": 90
+}
+```
+
+Protected requests require the `X-IRIS-Token` header. Use Electron’s preload bridge rather than reading the token directly from renderer code.
+
+## Parallel Desktop research
+
+Research tasks navigate real pages and collect final URLs, page titles, publication dates when detectable, and bounded DOM excerpts. Reports are synthesized only from collected evidence. Citation links are checked against successfully visited source URLs.
+
+If source collection, synthesis, or citation validation fails, IRIS returns a partial or failed task instead of fabricating completion. TXT, DOCX, and PDF exports are read back and verified before success is returned.
+
+## Tests
+
+Safe checks:
+
+```powershell
+npm run lint
+npm run build
+py -3.12 -m compileall -q iris_core
+npm test
+```
+
+`npm run check` runs lint, the production build, and all mocked test suites.
+
+The default suite uses mocks. It does not call paid APIs, browse the live internet, launch applications, or control the real mouse and keyboard.
+
+Live OpenAI test:
+
+```powershell
+$env:IRIS_RUN_INTEGRATION_TESTS='1'
+py -3.12 -m pytest -q iris_core/test_openai.py
+```
+
+Live Windows desktop tests:
+
+```powershell
+$env:IRIS_RUN_DESKTOP_TESTS='1'
+py -3.12 -m pytest -q iris_core/test_native_engine.py
+```
+
+Run live tests only in an interactive test environment.
+
+## Known limitations
+
+- Captchas and login walls require user takeover.
+- Browser DOM changes can require locator or planner updates.
+- OpenAI vision may return `not_found`; IRIS does not click invalid or low-confidence grounding.
+- Some native applications expose incomplete accessibility trees.
+- Unusual mixed-DPI driver configurations still require live integration testing.
+- Parallel Desktop is a separate Win32 desktop, not a malware-containment boundary.
+- Paid OpenAI requests require account access, available quota, and a supported configured model.

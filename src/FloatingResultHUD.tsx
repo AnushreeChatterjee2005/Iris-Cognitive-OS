@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { irisApiUrl } from './config';
 import {
   Copy,
   Check,
@@ -411,7 +412,7 @@ export function FloatingResultHUD({ task, onClose, onOpenParallelDesktop }: Floa
     e.stopPropagation();
     setExportingFormat(format);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/parallel-desktop/tasks/${task.task_id}/export`, {
+      const res = await fetch(irisApiUrl(`/api/parallel-desktop/tasks/${task.task_id}/export`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ format })

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { FloatingResultHUD } from './FloatingResultHUD';
+import { irisApiUrl } from './config';
 import {
   Layers,
   ArrowRight,
@@ -21,10 +22,12 @@ import {
 export interface ParallelTask {
   task_id: string;
   condition: string;
-  status: 'queued' | 'running' | 'paused' | 'completed' | 'error' | 'stopped';
+  state: 'queued' | 'running' | 'waiting' | 'success' | 'failed' | 'cancelled';
   progress: number;
   current_step: string;
   thought: string;
+  error_code?: string;
+  error_details?: string;
   created_at: number;
   updated_at: number;
   timeline: Array<{
@@ -51,18 +54,25 @@ export function ParallelDesktopTab() {
     if (!activeTask) return;
     setExportingFormat(format);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/parallel-desktop/tasks/${activeTask.task_id}/export`, {
+      const res = await fetch(irisApiUrl(`/api/parallel-desktop/tasks/${activeTask.task_id}/export`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ format })
       });
       if (res.ok) {
         const data = await res.json();
-        setToastMessage(data.message || `Saved ${format.toUpperCase()} to Desktop!`);
+        if (data.status === 'success') {
+          setToastMessage(data.message || `Saved ${format.toUpperCase()} to Desktop!`);
+        } else {
+          setToastMessage(data.message || 'Export verification failed.');
+        }
         setTimeout(() => setToastMessage(null), 4000);
+      } else {
+        const error = await res.json().catch(() => ({}));
+        setToastMessage(error.detail || error.message || 'Export failed.');
       }
-    } catch (e) {
-      setToastMessage('Exported to Desktop!');
+    } catch {
+      setToastMessage('Export failed because the backend is unavailable.');
       setTimeout(() => setToastMessage(null), 3000);
     } finally {
       setExportingFormat(null);
@@ -70,19 +80,29 @@ export function ParallelDesktopTab() {
   };
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [frameTick, setFrameTick] = useState(Date.now());
+  const [frameTick, setFrameTick] = useState(0);
+  const [desktopHealth, setDesktopHealth] = useState<'checking' | 'ready' | 'unavailable' | 'offline'>('checking');
 
   // Poll for background task updates
   const fetchStatus = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/parallel-desktop/status');
+      const healthRes = await fetch(irisApiUrl('/api/parallel-desktop/health'));
+      if (healthRes.ok) {
+        const health = await healthRes.json();
+        setDesktopHealth(health.status === 'ready' ? 'ready' : 'unavailable');
+      } else {
+        setDesktopHealth('unavailable');
+      }
+      const res = await fetch(irisApiUrl('/api/parallel-desktop/status'));
       if (res.ok) {
         const data = await res.json();
         if (data.active_task) {
           setActiveTask(data.active_task);
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      setDesktopHealth('offline');
+    }
   };
 
   useEffect(() => {
@@ -101,7 +121,7 @@ export function ParallelDesktopTab() {
 
     setPromptInput('');
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/parallel-desktop/tasks', {
+      const res = await fetch(irisApiUrl('/api/parallel-desktop/tasks'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ condition: cmd, mode: 'autonomous' })
@@ -109,36 +129,47 @@ export function ParallelDesktopTab() {
       if (res.ok) {
         const data = await res.json();
         if (data.task) setActiveTask(data.task);
+      } else {
+        const error = await res.json().catch(() => ({}));
+        setToastMessage(error.detail || 'Could not start Parallel Desktop task.');
       }
     } catch (err) {
       console.error('Launch failed:', err);
+      setToastMessage('Parallel Desktop backend is unavailable.');
     }
   };
 
   const handleStop = async () => {
     if (!activeTask) return;
     try {
-      await fetch(`http://127.0.0.1:8000/api/parallel-desktop/tasks/${activeTask.task_id}/stop`, {
+      const response = await fetch(irisApiUrl(`/api/parallel-desktop/tasks/${activeTask.task_id}/stop`), {
         method: 'POST'
       });
+      if (!response.ok) setToastMessage('Could not cancel the task.');
       fetchStatus();
-    } catch (e) {}
+    } catch {
+      setToastMessage('Could not cancel because the backend is unavailable.');
+    }
   };
 
   const handleBringToDesktop = async () => {
     if (!activeTask) return;
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/parallel-desktop/tasks/${activeTask.task_id}/bring-to-desktop`, {
+      const res = await fetch(irisApiUrl(`/api/parallel-desktop/tasks/${activeTask.task_id}/bring-to-desktop`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'all' })
       });
       if (res.ok) {
         const data = await res.json();
-        setToastMessage(data.message || 'Saved files to your Desktop!');
+        setToastMessage(data.status === 'success' ? (data.message || 'Saved files to your Desktop!') : (data.message || 'Result transfer failed.'));
         setTimeout(() => setToastMessage(null), 4000);
+      } else {
+        setToastMessage('Result transfer failed.');
       }
-    } catch (e) {}
+    } catch {
+      setToastMessage('Result transfer failed because the backend is unavailable.');
+    }
   };
 
   const copySummary = () => {
@@ -149,8 +180,9 @@ export function ParallelDesktopTab() {
     }
   };
 
-  const isWorking = activeTask && (activeTask.status === 'running' || activeTask.status === 'queued');
-  const isCompleted = activeTask && activeTask.status === 'completed';
+  const isWorking = activeTask && (activeTask.state === 'running' || activeTask.state === 'queued' || activeTask.state === 'waiting');
+  const isCompleted = activeTask && activeTask.state === 'success';
+  const isFailed = activeTask && (activeTask.state === 'failed' || activeTask.state === 'cancelled');
 
   return (
     <div className="parallel-desktop-root">
@@ -171,18 +203,26 @@ export function ParallelDesktopTab() {
             </div>
             <div>
               <h1 className="pd-title">Parallel Desktop</h1>
-              <div className="pd-subtitle">Runs autonomously in the background without touching your mouse or screen</div>
+              <div className="pd-subtitle">Runs in a separate Windows desktop to reduce interruptions</div>
             </div>
           </div>
 
           <div className="pd-status-wrapper">
-            {isWorking ? (
+            {desktopHealth === 'offline' ? (
+              <span className="pd-status-pill idle"><AlertTriangle size={13} color="#f59e0b" /> BACKEND OFFLINE</span>
+            ) : desktopHealth === 'unavailable' ? (
+              <span className="pd-status-pill idle"><AlertTriangle size={13} color="#f59e0b" /> DESKTOP UNAVAILABLE</span>
+            ) : isWorking ? (
               <span className="pd-status-pill running">
                 <span className="pd-status-dot running" /> WORKING IN BACKGROUND ({activeTask?.progress}%)
               </span>
             ) : isCompleted ? (
               <span className="pd-status-pill completed">
                 <CheckCircle2 size={13} color="#10b981" /> TASK COMPLETED
+              </span>
+            ) : isFailed ? (
+              <span className="pd-status-pill idle" title={activeTask?.error_details || activeTask?.current_step}>
+                <AlertTriangle size={13} color="#ef4444" /> {activeTask?.state === 'cancelled' ? 'TASK CANCELLED' : 'TASK FAILED'}
               </span>
             ) : (
               <span className="pd-status-pill idle">
@@ -207,6 +247,13 @@ export function ParallelDesktopTab() {
         </div>
       </header>
 
+      {isFailed && (
+        <div className="pd-toast">
+          <AlertTriangle size={16} color="#ef4444" />
+          <span>{activeTask?.error_details || activeTask?.current_step || 'The task did not complete.'}</span>
+        </div>
+      )}
+
       {/* Workspace Content */}
       <div className="pd-workspace-grid">
         {/* Left: Live Desktop Preview */}
@@ -216,24 +263,24 @@ export function ParallelDesktopTab() {
               <div className="pd-screen-tabs">
                 <span className="pd-screen-tab active">
                   <Monitor size={13} color="#00e5ff" />
-                  <span>Isolated Desktop Feed</span>
+                  <span>Separate Desktop Feed</span>
                 </span>
               </div>
               <div className="pd-screen-badges">
                 <span className="pd-screen-live-badge">
                   <span className="pd-pulse-dot" /> LIVE STREAM
                 </span>
-                <span className="pd-screen-res">100% Background</span>
+                <span className="pd-screen-res">Separate Workspace</span>
               </div>
             </div>
 
             <div className="pd-canvas-viewport">
               <img
-                src={`http://127.0.0.1:8000/api/parallel-desktop/feed?t=${frameTick}`}
+                src={irisApiUrl(`/api/parallel-desktop/feed?t=${frameTick}`)}
                 alt="Live Desktop Feed"
                 className="pd-stream-img"
                 onError={(e) => {
-                  (e.target as HTMLImageElement).src = `http://127.0.0.1:8000/api/parallel-desktop/frame?t=${Date.now()}`;
+                  (e.target as HTMLImageElement).src = irisApiUrl(`/api/parallel-desktop/frame?t=${Date.now()}`);
                 }}
               />
             </div>

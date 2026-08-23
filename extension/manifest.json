@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArlMnNAPF2lDBvaAJh+R6n3at9fuIzMqU/d8a44M/vdDZaOBzvc0+UkSaxrmnDptGtWwTG9G98jwZMDQ9ZzmeBfXlDEVKS48ro1LT5JXY3G7qjj35CY3WzUAfxIM7O4KQWOLeJEHFu4/B4nUKq3MXVEaBeKbIZnfwWOk5f/xlnRTnYj1uoZ+9bVqXAhmseGz91HVbos2+Z5kAUe1BzqH+oj3r/YNMK3GYHOlEKLGjfNE6I2vBCx5JT0DPTJ9lJo8xJh81HpppBUaoIsLPTfDdl9wJHevIdqNZmCtE4Ceea2CTmoOj0RU4Z97cB8gDR/rzA8x9vckLNZhDYStn51iVVQIDAQAB",
   "name": "IRIS Activity Gateway",
   "version": "1.0.0",
   "description": "Streams active Chrome tab URLs directly into the IRIS Cognitive Timeline.",
