@@ -225,6 +225,7 @@ npm start
 Developed for the **IRIS Cognitive OS Initiative**.
 
 - **Anushree Chatterjee** ([@AnushreeChatterjee2005](https://github.com/AnushreeChatterjee2005))
+- **Hitesh Kaushik** ([@kaushikhitesh448](https://github.com/kaushikhitesh448))
 
 ---
 
