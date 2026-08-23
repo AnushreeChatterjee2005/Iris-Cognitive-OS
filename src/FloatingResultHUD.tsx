@@ -238,29 +238,55 @@ function parseMarkdownToElements(rawText: string): React.ReactNode[] {
   let inTable = false;
 
   const renderInline = (text: string) => {
-    const parts = text.split(/(\*\*.*?\*\*|`.*?`)/g);
-    return parts.map((part, i) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return <strong key={i} style={{ color: '#f8fafc', fontWeight: 600 }}>{part.slice(2, -2)}</strong>;
-      }
-      if (part.startsWith('`') && part.endsWith('`')) {
-        return (
-          <code
-            key={i}
-            style={{
-              background: 'rgba(255, 255, 255, 0.08)',
-              color: '#e2e8f0',
-              padding: '1.5px 5px',
-              borderRadius: '4px',
-              fontSize: '12px',
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
-            }}
-          >
-            {part.slice(1, -1)}
-          </code>
-        );
-      }
-      return part;
+    const brParts = text.split(/<br\s*\/?>/gi);
+    return brParts.map((brPart, brIdx) => {
+      const parts = brPart.split(/(\*\*.*?\*\*|`.*?`|\[.*?\]\(.*?\))/g);
+      const renderedSegment = parts.map((part, i) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+          return <strong key={i} style={{ color: '#f8fafc', fontWeight: 600 }}>{part.slice(2, -2)}</strong>;
+        }
+        if (part.startsWith('`') && part.endsWith('`')) {
+          return (
+            <code
+              key={i}
+              style={{
+                background: 'rgba(255, 255, 255, 0.08)',
+                color: '#e2e8f0',
+                padding: '1.5px 5px',
+                borderRadius: '4px',
+                fontSize: '12px',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+              }}
+            >
+              {part.slice(1, -1)}
+            </code>
+          );
+        }
+        if (part.startsWith('[') && part.includes('](') && part.endsWith(')')) {
+          const match = part.match(/^\[(.*?)\]\((.*?)\)$/);
+          if (match) {
+            return (
+              <a
+                key={i}
+                href={match[2]}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: '#38bdf8', textDecoration: 'underline' }}
+              >
+                {match[1]}
+              </a>
+            );
+          }
+        }
+        return part;
+      });
+
+      return (
+        <React.Fragment key={brIdx}>
+          {renderedSegment}
+          {brIdx < brParts.length - 1 && <br />}
+        </React.Fragment>
+      );
     });
   };
 
@@ -269,12 +295,12 @@ function parseMarkdownToElements(rawText: string): React.ReactNode[] {
     const header = tableRows[0];
     const body = tableRows.slice(1);
     elements.push(
-      <div key={`tbl-${elements.length}`} style={{ overflowX: 'auto', margin: '14px 0', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
+      <div key={`tbl-${elements.length}`} style={{ overflowX: 'auto', margin: '14px 0', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px', textAlign: 'left' }}>
           <thead>
             <tr style={{ background: 'rgba(255, 255, 255, 0.04)', borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
               {header.map((col, idx) => (
-                <th key={idx} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: '#f1f5f9' }}>
+                <th key={idx} style={{ padding: '9px 12px', fontWeight: 600, color: '#f1f5f9', whiteSpace: 'nowrap' }}>
                   {renderInline(col)}
                 </th>
               ))}
@@ -284,7 +310,7 @@ function parseMarkdownToElements(rawText: string): React.ReactNode[] {
             {body.map((row, rIdx) => (
               <tr key={rIdx} style={{ borderBottom: rIdx === body.length - 1 ? 'none' : '1px solid rgba(255, 255, 255, 0.04)' }}>
                 {row.map((col, cIdx) => (
-                  <td key={cIdx} style={{ padding: '8px 12px', color: '#cbd5e1' }}>
+                  <td key={cIdx} style={{ padding: '9px 12px', color: '#cbd5e1', lineHeight: '1.5', verticalAlign: 'top' }}>
                     {renderInline(col)}
                   </td>
                 ))}

@@ -418,18 +418,17 @@ def watch_loop_full(task_id: str, source_bbox: dict, target_bbox: dict, conditio
 
 
     # --- NATIVE WORKFLOW & STEP DECOMPOSITION ENGINE ---
-    if not source_bbox:
-        log_to_file(f"[{task_id}] Routing command through Native Task Planner & Step Engine...")
-        try:
-            import importlib
-            import workflow_engine
-            importlib.reload(workflow_engine)
-            success = workflow_engine.execute_cross_app_workflow(task_id, condition, active_watchers, log_to_file)
-            if success:
-                log_to_file(f"[{task_id}] Native Step Engine executed task successfully with 0 vision calls!")
-                return
-        except Exception as we:
-            log_to_file(f"[{task_id}] Native Step Engine note ({we}), cascading to fallback...")
+    log_to_file(f"[{task_id}] Routing command through Native Task Planner & Step Engine: '{condition}'...")
+    try:
+        import importlib
+        import workflow_engine
+        importlib.reload(workflow_engine)
+        success = workflow_engine.execute_cross_app_workflow(task_id, condition, active_watchers, log_to_file)
+        if success:
+            log_to_file(f"[{task_id}] Native Step Engine executed task successfully with 0 vision calls!")
+            return
+    except Exception as we:
+        log_to_file(f"[{task_id}] Native Step Engine note ({we}), cascading to fallback...")
 
         log_to_file(f"[{task_id}] Entering Preserved Fallback ReAct Computer Use Agent Loop...")
         import win32gui

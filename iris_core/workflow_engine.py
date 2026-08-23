@@ -427,7 +427,7 @@ def execute_cross_app_workflow(task_id: str, command: str, active_watchers: dict
     log(f"Workflow Engine received command: '{command}'")
     update_status("🧠 Step 1/X: Analyzing command and decomposing tasks...", "Planning steps...")
 
-    # 1. Decompose command into sequential steps
+    # 1. Decompose command dynamically into sequential steps
     steps = decompose_command_with_llm(command)
     total_steps = len(steps)
     log(f"Decomposed into {total_steps} discrete steps: {json.dumps(steps)}")

@@ -96,9 +96,9 @@ class CrossAppRelay:
                     inv_match = re.search(r'Invoice\s*#?:\s*([A-Z0-9\-]+)', txt, re.IGNORECASE)
                     billed_match = re.search(r'Billed\s*To:\s*([^\n\r]+)', txt, re.IGNORECASE)
                     total_match = re.search(r'Total\s*(?:Amount|Due)?:\s*(\$[\d,]+(?:\.\d{2})?)', txt, re.IGNORECASE)
-                    inv_num = inv_match.group(1).strip() if inv_match else "INV-001"
-                    company = billed_match.group(1).split(',')[0].strip() if billed_match else "Acme Corp"
-                    total = total_match.group(1).strip() if total_match else "$1,200.00"
+                    inv_num = inv_match.group(1).strip() if inv_match else f"INV-{len(extracted_rows)+1:03d}"
+                    company = billed_match.group(1).split(',')[0].strip() if billed_match else "Client"
+                    total = total_match.group(1).strip() if total_match else "$0.00"
                     extracted_rows.append({"invoice_num": inv_num, "company": company, "total": total})
                 except Exception as pe:
                     log_to_file(f"[Relay-{self.name}] PDF read note: {pe}")

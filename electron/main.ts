@@ -21,6 +21,42 @@ let store: ActivityStore | null = null;
 // Suppress AMD GPU DirectComposition errors in terminal
 app.disableHardwareAcceleration();
 
+function getDevServerUrl(): string {
+  if (process.env.VITE_DEV_SERVER_URL) {
+    return process.env.VITE_DEV_SERVER_URL.replace(/\/$/, '');
+  }
+  return 'http://localhost:5173';
+}
+
+function loadWindow(
+  win: BrowserWindow | null,
+  routePath: string,
+  fallbackFile: string,
+  hashOption?: { hash: string }
+) {
+  if (!win) return;
+  if (!app.isPackaged) {
+    const devUrl = `${getDevServerUrl()}${routePath}`;
+    let retries = 0;
+    const tryLoad = () => {
+      if (!win || win.isDestroyed()) return;
+      win.loadURL(devUrl).catch(() => {
+        if (retries < 15) {
+          retries++;
+          setTimeout(tryLoad, 500);
+        }
+      });
+    };
+    tryLoad();
+  } else {
+    if (hashOption) {
+      win.loadFile(fallbackFile, hashOption);
+    } else {
+      win.loadFile(fallbackFile);
+    }
+  }
+}
+
 function createDashboardWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
@@ -44,11 +80,7 @@ function createDashboardWindow() {
   // Keep dashboard as a normal 'always-on-top' window
   dashboardWindow.setAlwaysOnTop(true, 'floating');
 
-  if (!app.isPackaged) {
-    dashboardWindow.loadURL('http://localhost:5173/#/');
-  } else {
-    dashboardWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/' });
-  }
+  loadWindow(dashboardWindow, '/#/', path.join(__dirname, '../dist/index.html'), { hash: '/' });
 
   // Dashboard is initially closed, so it must ignore all mouse events
   dashboardWindow.setIgnoreMouseEvents(true, { forward: true });
@@ -106,11 +138,7 @@ function createBlobWindow() {
   blobWindow.setAlwaysOnTop(true, 'pop-up-menu');
   blobWindow.setIgnoreMouseEvents(true, { forward: true });
 
-  if (!app.isPackaged) {
-    blobWindow.loadURL('http://localhost:5173/#/blob');
-  } else {
-    blobWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/blob' });
-  }
+  loadWindow(blobWindow, '/#/blob', path.join(__dirname, '../dist/index.html'), { hash: '/blob' });
 
   blobWindow.on('closed', () => {
     blobWindow = null;
@@ -140,11 +168,7 @@ function createOverlayWindow() {
 
   overlayWindow.setIgnoreMouseEvents(true, { forward: true });
 
-  if (!app.isPackaged) {
-    overlayWindow.loadURL('http://localhost:5173/overlay.html');
-  } else {
-    overlayWindow.loadFile(path.join(__dirname, '../dist/overlay.html'));
-  }
+  loadWindow(overlayWindow, '/overlay.html', path.join(__dirname, '../dist/overlay.html'));
 }
 
 function createSearchWindow() {
@@ -167,11 +191,7 @@ function createSearchWindow() {
     },
   });
 
-  if (!app.isPackaged) {
-    searchWindow.loadURL('http://localhost:5173/#/search');
-  } else {
-    searchWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/search' });
-  }
+  loadWindow(searchWindow, '/#/search', path.join(__dirname, '../dist/index.html'), { hash: '/search' });
 
   searchWindow.on('blur', () => {
     if (ignoreBlur) return;

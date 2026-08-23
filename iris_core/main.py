@@ -256,6 +256,65 @@ async def trigger_relay(req: RelayTriggerRequest):
     success = relay_engine.trigger_relay_event(req.relay_id, req.data)
     return {"status": "success" if success else "error"}
 
+# --- OPENAI VISION API LAYER ENDPOINTS ---
+class VisionLocateRequest(BaseModel):
+    target: str
+    hwnd: Optional[int] = 0
+    bbox: Optional[BoundingBox] = None
+    model: Optional[str] = "gpt-4o-mini"
+
+class VisionClickRequest(BaseModel):
+    target: str
+    hwnd: Optional[int] = 0
+    click_type: Optional[str] = "click"
+    double_click: Optional[bool] = False
+
+class VisionAnalyzeRequest(BaseModel):
+    query: str
+    hwnd: Optional[int] = 0
+    bbox: Optional[BoundingBox] = None
+
+@app.post("/api/vision/locate")
+async def vision_locate_endpoint(req: VisionLocateRequest):
+    """Visually grounds target UI button/icon coordinates using OpenAI Vision (GPT-4o-mini)."""
+    import vision_engine
+    bbox_dict = req.bbox.model_dump() if req.bbox else None
+    res = await asyncio.to_thread(
+        vision_engine.vision_engine.locate_element_coordinates,
+        req.target,
+        hwnd=req.hwnd,
+        bbox=bbox_dict,
+        model=req.model or "gpt-4o-mini"
+    )
+    return res
+
+@app.post("/api/vision/click")
+async def vision_click_endpoint(req: VisionClickRequest):
+    """Visually locates and executes click simulation on unexposed UI elements / icons."""
+    import vision_engine
+    res = await asyncio.to_thread(
+        vision_engine.vision_engine.click_visual_element,
+        req.target,
+        hwnd=req.hwnd,
+        click_type=req.click_type or "click",
+        double_click=req.double_click or False
+    )
+    return res
+
+@app.post("/api/vision/analyze")
+async def vision_analyze_endpoint(req: VisionAnalyzeRequest):
+    """Answers visual queries or inspection tasks about the active screen state."""
+    import vision_engine
+    bbox_dict = req.bbox.model_dump() if req.bbox else None
+    res = await asyncio.to_thread(
+        vision_engine.vision_engine.analyze_screen_vision,
+        req.query,
+        hwnd=req.hwnd,
+        bbox=bbox_dict
+    )
+    return res
+
+
 class ChatRequest(BaseModel):
     text: str
 
@@ -1082,6 +1141,20 @@ async def learn_from_timeline(req: dict):
             
         save_user_memory(mem)
         return {"status": "success", "learned": mem}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post("/memory/embed")
+@app.post("/api/memory/embed")
+async def memory_embed_endpoint(req: dict):
+    """Handles ambient activity memory embedding updates from Electron ActivityEngine."""
+    try:
+        if not req:
+            return {"status": "noop"}
+        # Learn and consolidate live ambient session into SQLite
+        if req.get("id"):
+            await learn_from_timeline({"sessions": [req]})
+        return {"status": "success", "embedded": True}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

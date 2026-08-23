@@ -1008,28 +1008,13 @@ function BlobOverlay() {
   const distBottom = window.innerHeight - pos.y;
   const minEdge = Math.min(distLeft, distRight, distTop, distBottom);
 
-  let micStyle: React.CSSProperties = {
-      position: 'absolute',
-      background: 'transparent',
-      border: 'none',
-      width: '28px', height: '28px',
-      display: (isHovered || isMicOn || isChatOpen || uiState !== 'Idle') ? 'flex' : 'none',
-      justifyContent: 'center', alignItems: 'center',
-      cursor: 'pointer',
-      pointerEvents: 'auto',
-      color: isMicOn ? '#ff3232' : 'white',
-      zIndex: 10005,
-      transition: 'all 0.2s',
-      filter: isMicOn ? 'drop-shadow(0 0 8px rgba(255, 50, 50, 0.8))' : 'drop-shadow(0 2px 4px rgba(0,0,0,0.5))'
-  };
-
   let chatToggleStyle: React.CSSProperties = {
       position: 'absolute',
       background: isChatOpen ? 'rgba(0, 229, 255, 0.25)' : 'transparent',
       border: isChatOpen ? '1px solid #00e5ff' : 'none',
       borderRadius: '50%',
       width: '28px', height: '28px',
-      display: (isHovered || isChatOpen || isMicOn || uiState !== 'Idle') ? 'flex' : 'none',
+      display: (isHovered || isChatOpen || uiState !== 'Idle') ? 'flex' : 'none',
       justifyContent: 'center', alignItems: 'center',
       cursor: 'pointer',
       pointerEvents: 'auto',
@@ -1103,8 +1088,7 @@ function BlobOverlay() {
 
   // The parent container is (BLOB_RADIUS + 40)*2 = 120x120. The core is 40x40 in the center.
   if (minEdge === distRight) {
-    micStyle.top = '30%'; micStyle.left = '-28px'; micStyle.transform = 'translateY(-50%)';
-    chatToggleStyle.top = '70%'; chatToggleStyle.left = '-28px'; chatToggleStyle.transform = 'translateY(-50%)';
+    chatToggleStyle.top = '50%'; chatToggleStyle.left = '-28px'; chatToggleStyle.transform = 'translateY(-50%)';
     chatBoxContainerStyle.top = '50%'; chatBoxContainerStyle.right = '100%'; chatBoxContainerStyle.marginRight = '35px'; chatBoxContainerStyle.transform = 'translateY(-50%)';
     
     if (isChatOpen) {
@@ -1118,8 +1102,7 @@ function BlobOverlay() {
     bubblesContainerStyle.top = 'calc(50% + 80px)'; bubblesContainerStyle.right = '120%'; bubblesContainerStyle.transform = 'translateY(-50%)'; bubblesContainerStyle.flexDirection = 'column';
     bubbleTextStyle.top = '50%'; bubbleTextStyle.right = '32px'; bubbleTextStyle.transform = 'translateY(-50%)';
   } else if (minEdge === distLeft) {
-    micStyle.top = '30%'; micStyle.right = '-28px'; micStyle.transform = 'translateY(-50%)';
-    chatToggleStyle.top = '70%'; chatToggleStyle.right = '-28px'; chatToggleStyle.transform = 'translateY(-50%)';
+    chatToggleStyle.top = '50%'; chatToggleStyle.right = '-28px'; chatToggleStyle.transform = 'translateY(-50%)';
     chatBoxContainerStyle.top = '50%'; chatBoxContainerStyle.left = '100%'; chatBoxContainerStyle.marginLeft = '35px'; chatBoxContainerStyle.transform = 'translateY(-50%)';
     
     if (isChatOpen) {
@@ -1133,8 +1116,7 @@ function BlobOverlay() {
     bubblesContainerStyle.top = 'calc(50% + 80px)'; bubblesContainerStyle.left = '120%'; bubblesContainerStyle.transform = 'translateY(-50%)'; bubblesContainerStyle.flexDirection = 'column';
     bubbleTextStyle.top = '50%'; bubbleTextStyle.left = '32px'; bubbleTextStyle.transform = 'translateY(-50%)';
   } else if (minEdge === distTop) {
-    micStyle.bottom = '-28px'; micStyle.left = '35%'; micStyle.transform = 'translateX(-50%)';
-    chatToggleStyle.bottom = '-28px'; chatToggleStyle.left = '65%'; chatToggleStyle.transform = 'translateX(-50%)';
+    chatToggleStyle.bottom = '-28px'; chatToggleStyle.left = '50%'; chatToggleStyle.transform = 'translateX(-50%)';
     chatBoxContainerStyle.top = '100%'; chatBoxContainerStyle.left = '50%'; chatBoxContainerStyle.marginTop = '35px'; chatBoxContainerStyle.transform = 'translateX(-50%)';
     
     if (isChatOpen) {
@@ -1147,8 +1129,7 @@ function BlobOverlay() {
     bubbleTextStyle.top = '32px'; bubbleTextStyle.left = '50%'; bubbleTextStyle.transform = 'translateX(-50%)';
   } else {
     // Bottom edge (default)
-    micStyle.top = '-28px'; micStyle.left = '35%'; micStyle.transform = 'translateX(-50%)';
-    chatToggleStyle.top = '-28px'; chatToggleStyle.left = '65%'; chatToggleStyle.transform = 'translateX(-50%)';
+    chatToggleStyle.top = '-28px'; chatToggleStyle.left = '50%'; chatToggleStyle.transform = 'translateX(-50%)';
     chatBoxContainerStyle.bottom = '100%'; chatBoxContainerStyle.left = '50%'; chatBoxContainerStyle.marginBottom = '35px'; chatBoxContainerStyle.transform = 'translateX(-50%)';
     
     if (isChatOpen) {
@@ -1560,20 +1541,6 @@ function BlobOverlay() {
           title={isChatOpen ? 'Close Chat' : 'Type Order / Chat'}
         >
           <MessageSquare size={13} />
-        </div>
-
-        {/* Floating Mic Toggle attached directly to the Blob */}
-        <div 
-          onClick={handleMicClick}
-          onPointerDown={e => e.stopPropagation()}
-          onPointerUp={e => e.stopPropagation()}
-          style={micStyle}
-          title={uiState === 'Working' || uiState === 'Thinking' ? 'Voice Command' : 'Voice Command'}
-        >
-          {uiState === 'Thinking' ? <Brain size={14} className="spin-slow" /> : 
-           uiState === 'Working' ? <Zap size={14} className="pulse-fast" /> : 
-           uiState === 'Done' ? <CheckCircle2 size={14} /> : 
-           <Mic size={14} />}
         </div>
       </div>
       {/* Ghost Mouse Overlay */}

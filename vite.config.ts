@@ -4,6 +4,9 @@ import electron from 'vite-plugin-electron/simple'
 
 // https://vite.dev/config/
 export default defineConfig({
+  server: {
+    port: 5173,
+  },
   plugins: [
     react(),
     electron({
